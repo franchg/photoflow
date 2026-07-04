@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# uv virtualenv (uv.lock is committed)
+.venv/
+
+# tooling caches
+.pytest_cache/
+.ruff_cache/
