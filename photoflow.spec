@@ -52,6 +52,13 @@ if sys.platform.startswith("linux"):
         "libwayland-server.so",
         "libglib-2.0.so", "libgobject-2.0.so", "libgio-2.0.so",
         "libgmodule-2.0.so", "libgthread-2.0.so",
+        # ...and everything the system stack itself resolves against: the
+        # system Mesa/LLVM/glib load into our process and must find *their*
+        # (newer) runtime deps, not our bundled older copies. Proven case: a
+        # bundled 22.04 libstdc++ lacks GLIBCXX_3.4.32 that libLLVM needs,
+        # killing EGL. All of these exist on any desktop Linux.
+        "libstdc++.so", "libgcc_s.so", "libffi.so", "libpcre2-8.so",
+        "libz.so", "libzstd.so",
     )
     a.binaries = [
         entry for entry in a.binaries

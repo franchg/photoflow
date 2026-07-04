@@ -111,7 +111,7 @@ jobs:
           done
           # system graphics stack must NOT be bundled (breaks EGL/gio on
           # newer distros than the runner — no window on Wayland)
-          for bad in libEGL.so libGLX.so libglib-2.0 libgio-2.0 libwayland-client libgbm.so libdrm.so; do
+          for bad in libEGL.so libGLX.so libglib-2.0 libgio-2.0 libwayland-client libgbm.so libdrm.so "libstdc++.so" libgcc_s.so libffi.so; do
             if grep -q "$bad" contents.txt; then
               echo "bundle must not ship $bad"; exit 1
             fi
