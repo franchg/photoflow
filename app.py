@@ -774,13 +774,14 @@ class MainWindow(QMainWindow):
             entries = [e for e in entries if e]
         if not entries:
             return
-        dlg = ExportDialog(len(entries), self)
+        items = [ExportItem(e.id, e.path, e.stack_json, e.capture_dt, e.mtime)
+                 for e in entries]
+        dlg = ExportDialog(len(items), self, sample=items[0])
         if dlg.exec() != ExportDialog.DialogCode.Accepted:
             return
         opts = dlg.options()
         if not opts.dest_dir:
             return
-        items = [ExportItem(e.id, e.path, e.stack_json) for e in entries]
         self._progress = QProgressDialog(
             f"Exporting {len(items)} images…", "Cancel", 0, len(items), self)
         self._progress.setWindowModality(Qt.WindowModality.WindowModal)

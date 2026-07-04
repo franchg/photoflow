@@ -11,22 +11,40 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import shutil
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 import pyexiv2
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QObject, QSettings, Qt, Signal
+from PySide6.QtGui import QImage, QPalette
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog,
-                               QFormLayout, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QSlider, QSpinBox)
+                               QFormLayout, QGridLayout, QHBoxLayout, QLabel,
+                               QLineEdit, QPushButton, QSlider, QSpinBox,
+                               QVBoxLayout)
 
 import decode
 import render
 from editstack import EditStack, StackError
+
+
+DEFAULT_PATTERN = "[FILE_NAME]"
+
+# (token, label, description) — order drives the insert-buttons in the dialog
+NAME_TOKENS = (
+    ("[FILE_NAME]", "Name", "Original file name"),
+    ("[Y]", "Year", "Capture year (falls back to file date)"),
+    ("[M]", "Month", "Capture month 01–12"),
+    ("[D]", "Day", "Capture day 01–31"),
+    ("[H]", "Hour", "Capture hour 00–23"),
+    ("[m]", "Minute", "Capture minute"),
+    ("[s]", "Second", "Capture second"),
+    ("[SEQ]", "Counter", "Sequence number 001, 002, …"),
+)
 
 
 @dataclass
@@ -34,6 +52,7 @@ class ExportOptions:
     dest_dir: str
     quality: int = 90
     resize_long: int | None = None
+    name_pattern: str = DEFAULT_PATTERN
 
 
 @dataclass
@@ -41,6 +60,9 @@ class ExportItem:
     fid: int
     path: str
     stack_json: str | None
+    capture_dt: str | None = None   # "YYYY-MM-DD HH:MM:SS" (EXIF)
+    mtime: float = 0.0
+    seq: int = 1                    # assigned in export order
 
 
 def _load_stack(stack_json: str | None) -> EditStack:
@@ -52,10 +74,36 @@ def _load_stack(stack_json: str | None) -> EditStack:
         return EditStack()
 
 
-def _unique_dest(dest_dir: str, src_path: str) -> str:
-    base = os.path.basename(src_path)
-    stem, ext = os.path.splitext(base)
-    out = os.path.join(dest_dir, base)
+def render_name(pattern: str, item: ExportItem) -> str:
+    """Resolve a filename pattern to a stem (no extension — that is appended
+    from the source format). Unsafe characters become '_'; a literal
+    .jpg/.png typed into the pattern is stripped."""
+    dt = item.capture_dt
+    if dt and len(dt) >= 19:
+        y, mo, d = dt[0:4], dt[5:7], dt[8:10]
+        h, mi, s = dt[11:13], dt[14:16], dt[17:19]
+    else:
+        t = time.localtime(item.mtime or 0)
+        y, mo, d = f"{t.tm_year:04d}", f"{t.tm_mon:02d}", f"{t.tm_mday:02d}"
+        h, mi, s = f"{t.tm_hour:02d}", f"{t.tm_min:02d}", f"{t.tm_sec:02d}"
+    stem = os.path.splitext(os.path.basename(item.path))[0]
+    out = pattern or DEFAULT_PATTERN
+    for token, value in (("[FILE_NAME]", stem), ("[Y]", y), ("[M]", mo),
+                         ("[D]", d), ("[H]", h), ("[m]", mi), ("[s]", s),
+                         ("[SEQ]", f"{item.seq:03d}")):
+        out = out.replace(token, value)
+    low = out.lower()
+    for ext in (".jpeg", ".jpg", ".png"):
+        if low.endswith(ext):
+            out = out[:-len(ext)]
+            break
+    out = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", out).strip()
+    return out or stem
+
+
+def _unique_dest(dest_dir: str, filename: str) -> str:
+    stem, ext = os.path.splitext(filename)
+    out = os.path.join(dest_dir, filename)
     n = 1
     while os.path.exists(out):
         out = os.path.join(dest_dir, f"{stem}_{n}{ext}")
@@ -107,18 +155,22 @@ def export_one(item: ExportItem, opts: ExportOptions) -> str:
     geo = stack.geometry()
     tune = render.TuneUniforms(stack.folded_tune())
     has_edits = stack.has_edits()
-    out_path = _unique_dest(opts.dest_dir, item.path)
+    src_ext = os.path.splitext(item.path)[1].lower() or ".jpg"
+    out_path = _unique_dest(opts.dest_dir,
+                            render_name(opts.name_pattern, item) + src_ext)
 
     with open(item.path, "rb") as f:
         prefix = f.read(decode.EXIF_PREFIX_BYTES)
+    src_is_png = decode.is_png(prefix)
     orientation = decode.parse_exif(prefix).orientation
 
+    # Byte copy (also the only path that preserves PNG alpha).
     if not has_edits and opts.resize_long is None and orientation == 1:
         shutil.copyfile(item.path, out_path)
         return out_path
 
-    # Lossless path: net effect is a pure 90° rotation of the source bytes.
-    if (opts.resize_long is None and stack.only_rotations()
+    # Lossless path (JPEG only): net effect is a pure 90° rotation.
+    if (not src_is_png and opts.resize_long is None and stack.only_rotations()
             and orientation in decode.ORIENTATION_TO_CW_DEGREES):
         total = (decode.ORIENTATION_TO_CW_DEGREES[orientation]
                  + geo.cw_degrees) % 360
@@ -145,7 +197,9 @@ def export_one(item: ExportItem, opts: ExportOptions) -> str:
     arr = render.apply_tune_uint8(arr, tune)
     if opts.resize_long is not None:
         arr = _resize_exact(arr, opts.resize_long)
-    blob = decode.encode_jpeg(arr, opts.quality)
+    # Stay in the source format: PNG in → PNG out (lossless, quality N/A).
+    blob = (decode.encode_png(arr) if src_is_png
+            else decode.encode_jpeg(arr, opts.quality))
     with open(out_path, "wb") as f:
         f.write(blob)
     _copy_metadata(item.path, out_path, arr.shape[1], arr.shape[0])
@@ -171,7 +225,8 @@ class Exporter(QObject):
         self._total = len(items)
         self._pool = ThreadPoolExecutor(os.cpu_count() or 4,
                                         thread_name_prefix="pf-export")
-        for item in items:
+        for seq, item in enumerate(items, 1):
+            item.seq = seq
             self._pool.submit(self._job, item, opts)
         self._pool.shutdown(wait=False)
 
@@ -203,9 +258,11 @@ class Exporter(QObject):
 
 
 class ExportDialog(QDialog):
-    def __init__(self, count: int, parent=None):
+    def __init__(self, count: int, parent=None,
+                 sample: ExportItem | None = None):
         super().__init__(parent)
         self.setWindowTitle(f"Export {count} image{'s' if count != 1 else ''}")
+        self._sample = sample
         form = QFormLayout(self)
 
         dest_row = QHBoxLayout()
@@ -216,6 +273,32 @@ class ExportDialog(QDialog):
         dest_row.addWidget(self._dest, 1)
         dest_row.addWidget(browse)
         form.addRow("Destination", dest_row)
+
+        name_col = QVBoxLayout()
+        self._pattern = QLineEdit(
+            QSettings("photoflow", "photoflow").value("export_pattern",
+                                                      DEFAULT_PATTERN))
+        self._pattern.setToolTip(
+            "Compose the file name from the tokens below plus any literal "
+            "text. The extension follows the source format automatically.")
+        self._pattern.textChanged.connect(self._update_preview)
+        name_col.addWidget(self._pattern)
+        tokens = QGridLayout()
+        tokens.setSpacing(4)
+        for i, (token, label, tip) in enumerate(NAME_TOKENS):
+            b = QPushButton(label)
+            b.setToolTip(f"{tip}  —  inserts {token}")
+            b.clicked.connect(lambda _=False, t=token: self._pattern.insert(t))
+            tokens.addWidget(b, i // 4, i % 4)
+        name_col.addLayout(tokens)
+        self._preview = QLabel()
+        muted = self._preview.palette()
+        muted.setColor(QPalette.ColorRole.WindowText,
+                       muted.color(QPalette.ColorRole.PlaceholderText))
+        self._preview.setPalette(muted)
+        name_col.addWidget(self._preview)
+        form.addRow("File name", name_col)
+        self._update_preview()
 
         q_row = QHBoxLayout()
         self._quality = QSlider(Qt.Orientation.Horizontal)
@@ -251,8 +334,19 @@ class ExportDialog(QDialog):
         if d:
             self._dest.setText(d)
 
+    def _update_preview(self) -> None:
+        if self._sample is None:
+            self._preview.setText("")
+            return
+        ext = os.path.splitext(self._sample.path)[1].lower() or ".jpg"
+        name = render_name(self._pattern.text(), self._sample) + ext
+        self._preview.setText(f"Preview: {name}")
+
     def options(self) -> ExportOptions:
+        pattern = self._pattern.text().strip() or DEFAULT_PATTERN
+        QSettings("photoflow", "photoflow").setValue("export_pattern", pattern)
         return ExportOptions(
             dest_dir=self._dest.text().strip(),
             quality=self._quality.value(),
-            resize_long=self._resize_px.value() if self._resize_on.isChecked() else None)
+            resize_long=self._resize_px.value() if self._resize_on.isChecked() else None,
+            name_pattern=pattern)

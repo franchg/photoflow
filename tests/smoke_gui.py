@@ -14,7 +14,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from verify_headless import make_test_jpeg  # noqa: E402
+from verify_headless import make_test_jpeg, make_test_png  # noqa: E402
 
 from PySide6.QtGui import QSurfaceFormat  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -36,12 +36,14 @@ for _key in ("last_folder", "folders_visible", "grid_size", "show_hidden",
     _settings.remove(_key)
 _settings.sync()
 
-N = 12
 folder = tempfile.mkdtemp(prefix="photoflow-smoke-")
-for i in range(N):
+for i in range(12):
     make_test_jpeg(os.path.join(folder, f"img{i:03d}.jpg"),
                    orientation=6 if i % 3 == 0 else 1,
                    capture=f"2024:07:{i + 1:02d} 10:00:00")
+make_test_png(os.path.join(folder, "png000.png"))
+make_test_png(os.path.join(folder, "png001.png"), alpha=True)
+N = 14  # 12 JPEGs + 2 PNGs, all flowing through the same pipeline
 
 win = photoflow_app.MainWindow()
 win.resize(1280, 800)

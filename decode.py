@@ -1,8 +1,12 @@
-"""JPEG decode/encode via libjpeg-turbo, plus minimal EXIF parsing.
+"""Image decode/encode: JPEG via libjpeg-turbo (hot path, scaled DCT decode),
+PNG via Qt's codec. Format is dispatched on magic bytes right here so the
+rest of the app stays format-blind.
 
-Everything here is thread-safe: TurboJPEG handles are thread-local and
-libjpeg-turbo releases the GIL, so worker threads get real parallelism.
-JPEG-only is a hard assumption (see PLAN.md) — no format sniffing anywhere.
+Everything here is thread-safe: TurboJPEG handles are thread-local,
+libjpeg-turbo releases the GIL, and QImage decode/scale works off the GUI
+thread. PNG has no scaled decode or embedded EXIF thumb — those stages
+degrade gracefully (full decode + smooth downscale, no provisional thumb).
+PNG alpha is flattened over white everywhere except byte-copy exports.
 """
 from __future__ import annotations
 
@@ -13,9 +17,19 @@ import threading
 from typing import NamedTuple
 
 import numpy as np
+from PySide6.QtCore import QBuffer, QIODevice, Qt
+from PySide6.QtGui import QImage
 from turbojpeg import TJFLAG_FASTDCT, TJFLAG_FASTUPSAMPLE, TJPF_RGB, TurboJPEG
 
 JPEG_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif"}
+PNG_EXTENSIONS = {".png"}
+SCAN_EXTENSIONS = JPEG_EXTENSIONS | PNG_EXTENSIONS
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def is_png(data: bytes) -> bool:
+    return data[:8] == _PNG_MAGIC
 
 # DCT-domain downscale factors supported by libjpeg-turbo, smallest first.
 SCALING_FACTORS = ((1, 8), (1, 4), (3, 8), (1, 2), (5, 8), (3, 4), (7, 8), (1, 1))
@@ -32,8 +46,40 @@ def _tj() -> TurboJPEG:
 
 def read_header(data: bytes) -> tuple[int, int]:
     """(width, height) without decoding pixels."""
+    if is_png(data):
+        return struct.unpack(">II", data[16:24])  # IHDR is always first
     width, height, _subsample, _colorspace = _tj().decode_header(data)
     return width, height
+
+
+def qimage_to_rgb(img: QImage) -> np.ndarray:
+    """QImage (any format) → HxWx3 uint8; alpha is flattened over white."""
+    if img.hasAlphaChannel():
+        img = img.convertToFormat(QImage.Format.Format_RGBA8888)
+        h, w, bpl = img.height(), img.width(), img.bytesPerLine()
+        buf = np.frombuffer(img.constBits(), np.uint8, bpl * h)
+        rgba = buf.reshape(h, bpl)[:, :w * 4].reshape(h, w, 4).astype(np.float32)
+        a = rgba[..., 3:4] / 255.0
+        return (rgba[..., :3] * a + 255.0 * (1.0 - a) + 0.5).astype(np.uint8)
+    img = img.convertToFormat(QImage.Format.Format_RGB888)
+    h, w, bpl = img.height(), img.width(), img.bytesPerLine()
+    buf = np.frombuffer(img.constBits(), np.uint8, bpl * h)
+    return buf.reshape(h, bpl)[:, :w * 3].reshape(h, w, 3).copy()
+
+
+def _decode_png(data: bytes, target_long_edge: int | None) -> np.ndarray:
+    img = QImage.fromData(data)
+    if img.isNull():
+        raise ValueError("cannot decode PNG")
+    if (target_long_edge is not None
+            and max(img.width(), img.height()) > target_long_edge):
+        if img.width() >= img.height():
+            img = img.scaledToWidth(target_long_edge,
+                                    Qt.TransformationMode.SmoothTransformation)
+        else:
+            img = img.scaledToHeight(target_long_edge,
+                                     Qt.TransformationMode.SmoothTransformation)
+    return qimage_to_rgb(img)
 
 
 def pick_scale(src_w: int, src_h: int, target_long_edge: int) -> tuple[int, int]:
@@ -50,8 +96,11 @@ def decode_scaled(data: bytes, target_long_edge: int | None = None,
     """Decode to RGB uint8, never producing more pixels than needed.
 
     target_long_edge=None decodes full resolution. `fast` trades a little
-    accuracy for speed (thumbnails); export passes fast=False.
+    accuracy for speed (thumbnails); export passes fast=False. PNG input is
+    dispatched to Qt's codec (no scaled decode there; `fast` is ignored).
     """
+    if is_png(data):
+        return _decode_png(data, target_long_edge)
     tj = _tj()
     if target_long_edge is None:
         sf = (1, 1)
@@ -66,6 +115,17 @@ def encode_jpeg(rgb: np.ndarray, quality: int = 87) -> bytes:
     if not rgb.flags["C_CONTIGUOUS"]:
         rgb = np.ascontiguousarray(rgb)
     return _tj().encode(rgb, quality=quality, pixel_format=TJPF_RGB)
+
+
+def encode_png(rgb: np.ndarray) -> bytes:
+    if not rgb.flags["C_CONTIGUOUS"]:
+        rgb = np.ascontiguousarray(rgb)
+    h, w = rgb.shape[:2]
+    img = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, "PNG")
+    return bytes(buf.data())
 
 
 def box_downsample(rgb: np.ndarray, factor: int) -> np.ndarray:

@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 import numpy as np
 
@@ -23,7 +24,7 @@ import render
 from catalog import Catalog
 from editstack import (EditClipboard, EditStack, Op, StackError, StackHistory,
                        validate_op)
-from export import ExportItem, ExportOptions, export_one
+from export import ExportItem, ExportOptions, export_one, render_name
 
 
 def make_test_jpeg(path: str, w: int = 640, h: int = 480,
@@ -45,6 +46,29 @@ def make_test_jpeg(path: str, w: int = 640, h: int = 480,
         img.modify_exif(exif)
         thumb_arr = rgb[::8, ::8]
         img.modify_thumbnail(decode.encode_jpeg(np.ascontiguousarray(thumb_arr), 80))
+    return rgb
+
+
+def make_test_png(path: str, w: int = 320, h: int = 240,
+                  alpha: bool = False) -> np.ndarray:
+    """Deterministic PNG; alpha=True adds a fully transparent corner."""
+    yy, xx = np.mgrid[0:h, 0:w]
+    rgb = np.stack([
+        (xx * 255 // max(w - 1, 1)),
+        (yy * 255 // max(h - 1, 1)),
+        np.full((h, w), 60),
+    ], axis=-1).astype(np.uint8)
+    rgb[: h // 8, : w // 8] = (255, 0, 0)
+    if alpha:
+        from PySide6.QtGui import QImage
+        rgba = np.ascontiguousarray(np.dstack(
+            [rgb, np.full((h, w), 255, np.uint8)]))
+        rgba[-h // 4:, -w // 4:, 3] = 0
+        img = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_RGBA8888)
+        img.save(path, "PNG")
+    else:
+        with open(path, "wb") as f:
+            f.write(decode.encode_png(rgb))
     return rgb
 
 
@@ -269,6 +293,68 @@ def main() -> None:
                      ExportOptions(dest, quality=95))
     w, h = decode.read_header(open(out, "rb").read())
     check("oriented source baked", (w, h) == (240, 320), f"{(w, h)}")
+
+    # ---- export naming patterns ------------------------------------------------
+    named = ExportItem(1, "/x/DSC_0042.jpg", None,
+                       capture_dt="2024-07-04 12:34:56", mtime=0.0, seq=7)
+    check("pattern tokens", render_name(
+        "[Y]-[M]-[D]-[m]-[s]_[FILE_NAME]_export.jpg", named)
+        == "2024-07-04-34-56_DSC_0042_export")  # literal .jpg stripped
+    check("pattern seq + hour", render_name("[SEQ]-[H]", named) == "007-12")
+    check("pattern mtime fallback", render_name(
+        "[Y]", ExportItem(1, "/x/a.jpg", None,
+                          mtime=time.mktime((2023, 1, 2, 3, 4, 5, 0, 0, -1))))
+        == "2023")
+    check("pattern sanitized", render_name("a/b:c", named) == "a_b_c")
+    check("pattern empty falls back", render_name("", named) == "DSC_0042")
+
+    out = export_one(ExportItem(1, plain, None,
+                                capture_dt="2022-05-06 07:08:09", seq=3),
+                     ExportOptions(dest, name_pattern="[Y][M][D]_[SEQ]_[FILE_NAME]"))
+    check("export honors pattern",
+          os.path.basename(out) == "20220506_003_plain.jpg", out)
+    out2 = export_one(ExportItem(1, plain, None,
+                                 capture_dt="2022-05-06 07:08:09", seq=3),
+                      ExportOptions(dest, name_pattern="[Y][M][D]_[SEQ]_[FILE_NAME]"))
+    check("name collision suffixed",
+          os.path.basename(out2) == "20220506_003_plain_1.jpg", out2)
+
+    # ---- PNG support ---------------------------------------------------------
+    png = os.path.join(tmp, "img2.png")
+    png_rgb = make_test_png(png)
+    pdata = open(png, "rb").read()
+    check("png magic + header", decode.is_png(pdata)
+          and decode.read_header(pdata) == (320, 240))
+    pfull = decode.decode_scaled(pdata)
+    check("png decode lossless", np.array_equal(pfull, png_rgb))
+    check("png scaled decode",
+          max(decode.decode_scaled(pdata, 128).shape[:2]) == 128)
+    check("png exif defaults", decode.parse_exif(
+        pdata[:decode.EXIF_PREFIX_BYTES]) == decode.ExifInfo())
+
+    apng = os.path.join(tmp, "alpha.png")
+    make_test_png(apng, alpha=True)
+    aarr = decode.decode_scaled(open(apng, "rb").read())
+    check("png alpha flattens to white", bool((aarr[-5, -5] > 250).all()),
+          str(aarr[-5, -5]))
+
+    out = export_one(ExportItem(1, png, None), ExportOptions(dest))
+    check("png export copy identical (keeps alpha path)",
+          open(out, "rb").read() == pdata)
+    out = export_one(ExportItem(1, png, tune_stack.to_json()),
+                     ExportOptions(dest))
+    odata = open(out, "rb").read()
+    check("png export stays png", decode.is_png(odata))
+    check("png export pixels exact (lossless)", np.array_equal(
+        decode.decode_scaled(odata), render.render_stack(pfull, tune_stack)))
+    out = export_one(ExportItem(1, png, rot_only.to_json()), ExportOptions(dest))
+    odata = open(out, "rb").read()
+    check("png rotate export (pixel path, stays png)",
+          decode.is_png(odata) and decode.read_header(odata) == (240, 320))
+    out = export_one(ExportItem(1, png, None),
+                     ExportOptions(dest, resize_long=160))
+    check("png resize export", decode.read_header(
+        open(out, "rb").read()) == (160, 120))
 
     print(f"\nALL PASS  (workdir {tmp})")
 

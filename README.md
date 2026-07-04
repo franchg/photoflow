@@ -1,7 +1,8 @@
 # photoflow
 
-Fast native Linux app for JPEG browsing, review/culling, and light
-non-destructive editing. See [PLAN.md](PLAN.md) for the full technical spec.
+Fast native Linux app for JPEG (and PNG) browsing, review/culling, and light
+non-destructive editing. See [PLAN.md](PLAN.md) for the full technical spec
+(written JPEG-first; PNG support was added later — see below).
 
 ## Run
 
@@ -63,6 +64,12 @@ Python dependencies are managed by uv (`uv sync`).
 - Thumbnails: EXIF-embedded thumbs paint first, then 1/8-scale libjpeg-turbo
   decodes replace them; everything is cached in SQLite keyed by
   `(path, mtime, size)`. The catalog lives in `~/.local/share/photoflow/`.
+- PNG: decoded via Qt's codec (`decode.py` dispatches on magic bytes; the rest
+  of the app is format-blind). No scaled decode or embedded-thumb stage —
+  PNGs full-decode then downscale. Alpha is flattened over white in the
+  pipeline; a no-edit export is a byte copy and keeps alpha. Exports stay in
+  the source format (PNG in → PNG out, lossless; the quality slider is
+  JPEG-only), and the jpegtran lossless-rotate path is JPEG-only.
 - All I/O and decoding runs on worker thread pools; the UI thread never
   touches a file or a pixel.
 

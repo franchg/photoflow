@@ -116,7 +116,7 @@ class Workers:
                         continue
                     if de.name.startswith(".") and not include_hidden:
                         continue
-                    if os.path.splitext(de.name)[1].lower() not in decode.JPEG_EXTENSIONS:
+                    if os.path.splitext(de.name)[1].lower() not in decode.SCAN_EXTENSIONS:
                         continue
                     st = de.stat()
                     found.append((de.path, st.st_mtime, st.st_size))
