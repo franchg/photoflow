@@ -876,11 +876,65 @@ def apply_theme(app: QApplication, mode: str) -> None:
         app.setPalette(_native_palette or QPalette())
 
 
+def _register_linux_desktop(data_home: str | None = None) -> None:
+    """Install the launcher entry + theme icons for the packaged Linux binary.
+
+    On Wayland the dock/taskbar icon comes from a .desktop file matched to
+    the window's app id — a window icon alone shows as a generic gear. Runs
+    on every frozen start so Exec= follows the binary if it moves. Passing
+    data_home (tests) skips the frozen-only gate.
+    """
+    if sys.platform != "linux":
+        return
+    if data_home is None:
+        if not getattr(sys, "frozen", False):
+            return
+        data_home = os.environ.get("XDG_DATA_HOME",
+                                   os.path.expanduser("~/.local/share"))
+    apps_dir = os.path.join(data_home, "applications")
+    scalable = os.path.join(data_home, "icons", "hicolor", "scalable", "apps")
+    sized = os.path.join(data_home, "icons", "hicolor", "256x256", "apps")
+    for d in (apps_dir, scalable, sized):
+        os.makedirs(d, exist_ok=True)
+    with open(os.path.join(scalable, "photoflow.svg"), "w") as f:
+        f.write(styles.app_icon_svg())
+    png = os.path.join(sized, "photoflow.png")
+    if not os.path.exists(png):
+        styles.write_app_icon(png)
+    exe = os.path.realpath(sys.executable)
+    entry = "\n".join((
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=photoflow",
+        "Comment=Fast JPEG/PNG browser, culling and non-destructive editor",
+        f'Exec="{exe}" %F',
+        "Icon=photoflow",
+        "Terminal=false",
+        "Categories=Graphics;Photography;Viewer;",
+        "MimeType=image/jpeg;image/png;",
+        "StartupWMClass=photoflow",
+    )) + "\n"
+    path = os.path.join(apps_dir, "photoflow.desktop")
+    try:
+        with open(path) as f:
+            if f.read() == entry:
+                return
+    except OSError:
+        pass
+    with open(path, "w") as f:
+        f.write(entry)
+
+
 def main() -> int:
     QSurfaceFormat.setDefaultFormat(default_gl_format())
     app = QApplication(sys.argv)
     app.setApplicationName("photoflow")
+    app.setDesktopFileName("photoflow")  # Wayland app id ↔ photoflow.desktop
     app.setWindowIcon(styles.app_icon())
+    try:
+        _register_linux_desktop()
+    except OSError:
+        pass  # desktop integration must never block startup
     capture_native_theme(app)
     theme = QSettings("photoflow", "photoflow").value("theme", "system")
     apply_theme(app, theme if theme in THEMES else "system")

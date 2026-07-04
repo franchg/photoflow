@@ -35,6 +35,13 @@ dispatch or a `v*` tag, which also attaches them to the GitHub release.
 Each platform job runs the headless test suite first as a compatibility
 gate.
 
+On first launch the packaged Linux binary registers itself with the
+desktop — a launcher entry plus the aperture icon under
+`~/.local/share` — so the dock/taskbar shows the real logo (on Wayland
+that icon can only come from a `.desktop` entry) and photoflow appears in
+the app launcher. The entry's `Exec=` is refreshed on every start, so
+moving the binary is fine.
+
 ## Settings
 
 **Settings…** (Ctrl+,) covers:

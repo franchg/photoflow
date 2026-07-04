@@ -11,7 +11,7 @@ import os
 import sys
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 DARK = {
@@ -136,8 +136,25 @@ def themed_icon(name: str, color: QColor | str) -> QIcon:
     return _icon_cache[key]
 
 
+def app_icon_svg() -> str:
+    """The aperture mark as a standalone SVG document (brand blue)."""
+    return _svg("aperture", "#5b8def")
+
+
 def app_icon() -> QIcon:
     return themed_icon("aperture", "#5b8def")
+
+
+def write_app_icon(path: str, size: int = 256) -> bool:
+    """Render the aperture mark to an icon file (.png/.ico by extension) —
+    the exe icon on Windows, the theme icon for Linux desktop entries."""
+    img = QImage(size, size, QImage.Format.Format_ARGB32)
+    img.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(img)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    QSvgRenderer(QByteArray(app_icon_svg().encode())).render(painter)
+    painter.end()
+    return img.save(path)
 
 
 # ----------------------------------------------------------------------- QSS

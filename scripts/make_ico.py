@@ -9,24 +9,16 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PySide6.QtCore import QByteArray, Qt
-from PySide6.QtGui import QGuiApplication, QImage, QPainter
-from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtGui import QGuiApplication
 
 import styles
 
 
 def main() -> int:
     QGuiApplication(sys.argv)
-    img = QImage(256, 256, QImage.Format.Format_ARGB32)
-    img.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(img)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    QSvgRenderer(QByteArray(styles._svg("aperture", "#5b8def").encode())).render(painter)
-    painter.end()
     os.makedirs("build", exist_ok=True)
     out = os.path.join("build", "photoflow.ico")
-    if not img.save(out, "ICO"):
+    if not styles.write_app_icon(out):
         print("failed to write", out, file=sys.stderr)
         return 1
     print("wrote", out)
