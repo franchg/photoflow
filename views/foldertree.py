@@ -2,8 +2,14 @@
 QFileSystemModel. Selecting a folder scans it into the grid."""
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QDir, Signal
 from PySide6.QtWidgets import QFileSystemModel, QTreeView
+
+# "" is QFileSystemModel's computer root: on Windows it lists all drives,
+# where "/" would silently pin the tree to the current drive only.
+_FS_ROOT = "" if sys.platform == "win32" else "/"
 
 
 class FolderTree(QTreeView):
@@ -14,9 +20,9 @@ class FolderTree(QTreeView):
         self._fs = QFileSystemModel(self)
         self._fs.setFilter(QDir.Filter.AllDirs | QDir.Filter.NoDotAndDotDot
                            | QDir.Filter.Drives)
-        self._fs.setRootPath("/")
+        self._fs.setRootPath(_FS_ROOT)
         self.setModel(self._fs)
-        self.setRootIndex(self._fs.index("/"))
+        self.setRootIndex(self._fs.index(_FS_ROOT))
         for col in range(1, self._fs.columnCount()):
             self.hideColumn(col)
         self.setHeaderHidden(True)

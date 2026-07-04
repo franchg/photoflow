@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import queue
 import sqlite3
+import sys
 import threading
 import time
 from concurrent.futures import Future
@@ -44,7 +45,14 @@ CREATE TABLE IF NOT EXISTS edits(
 
 
 def default_db_path() -> str:
-    base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA",
+                              os.path.expanduser("~/AppData/Local"))
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME",
+                              os.path.expanduser("~/.local/share"))
     d = os.path.join(base, "photoflow")
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, "catalog.db")

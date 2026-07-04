@@ -10,9 +10,11 @@ PNG alpha is flattened over white everywhere except byte-copy exports.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import struct
 import subprocess
+import sys
 import threading
 from typing import NamedTuple
 
@@ -37,10 +39,30 @@ SCALING_FACTORS = ((1, 8), (1, 4), (3, 8), (1, 2), (5, 8), (3, 4), (7, 8), (1, 1
 _local = threading.local()
 
 
+def _bundle_dir() -> str | None:
+    """PyInstaller bundle dir when frozen (native libs live there), else None."""
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    return None
+
+
+def _turbojpeg_lib_path() -> str | None:
+    """Bundled turbojpeg when frozen; None lets PyTurboJPEG search the
+    platform default locations (system lib on Linux, C:\\libjpeg-turbo64 on
+    Windows)."""
+    bundle = _bundle_dir()
+    if bundle is None:
+        return None
+    name = {"win32": "turbojpeg.dll", "darwin": "libturbojpeg.dylib"}.get(
+        sys.platform, "libturbojpeg.so.0")
+    path = os.path.join(bundle, name)
+    return path if os.path.exists(path) else None
+
+
 def _tj() -> TurboJPEG:
     tj = getattr(_local, "tj", None)
     if tj is None:
-        tj = _local.tj = TurboJPEG()
+        tj = _local.tj = TurboJPEG(_turbojpeg_lib_path())
     return tj
 
 
@@ -279,8 +301,19 @@ def _parse_exif(prefix: bytes) -> ExifInfo:
 # Lossless rotation via jpegtran (libjpeg-turbo-progs).
 # --------------------------------------------------------------------------
 
+def _jpegtran_cmd() -> str | None:
+    """Bundled jpegtran when frozen, else whatever is on PATH."""
+    bundle = _bundle_dir()
+    if bundle is not None:
+        exe = os.path.join(
+            bundle, "jpegtran.exe" if sys.platform == "win32" else "jpegtran")
+        if os.path.exists(exe):
+            return exe
+    return shutil.which("jpegtran")
+
+
 def jpegtran_available() -> bool:
-    return shutil.which("jpegtran") is not None
+    return _jpegtran_cmd() is not None
 
 
 def lossless_rotate(src_path: str, dst_path: str, cw_degrees: int) -> bool:
@@ -290,10 +323,11 @@ def lossless_rotate(src_path: str, dst_path: str, cw_degrees: int) -> bool:
     if cw_degrees == 0:
         shutil.copyfile(src_path, dst_path)
         return True
-    if not jpegtran_available():
+    cmd = _jpegtran_cmd()
+    if cmd is None:
         return False
     result = subprocess.run(
-        ["jpegtran", "-rot", str(cw_degrees), "-perfect", "-copy", "all",
+        [cmd, "-rot", str(cw_degrees), "-perfect", "-copy", "all",
          "-outfile", dst_path, src_path],
         capture_output=True,
     )

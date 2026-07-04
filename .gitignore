@@ -8,3 +8,7 @@ __pycache__/
 # tooling caches
 .pytest_cache/
 .ruff_cache/
+
+# PyInstaller output
+build/
+dist/

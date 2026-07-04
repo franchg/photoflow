@@ -1,0 +1,51 @@
+# PyInstaller spec for photoflow (one-dir, windowed).
+#
+# Native pieces that PyInstaller cannot discover on its own:
+#   - turbojpeg (loaded via ctypes by PyTurboJPEG) — path taken from
+#     $TURBOJPEG_DLL, defaulting to the official Windows installer location.
+#     decode.py looks for it in the bundle dir when frozen.
+#   - jpegtran (subprocess, optional) — same treatment; its absence only
+#     disables lossless-rotation exports.
+#   - pyexiv2 ships its own exiv2 native lib → collect_all.
+#   - shaders/adjust.frag is read from disk relative to views/viewer.py,
+#     so it must land at the same relative path inside the bundle.
+#
+# The exe icon is optional: scripts/make_ico.py renders build/photoflow.ico
+# from the in-code SVG; without it the build simply has no icon.
+import os
+import sys
+
+from PyInstaller.utils.hooks import collect_all
+
+pyexiv2_datas, pyexiv2_binaries, pyexiv2_hidden = collect_all("pyexiv2")
+
+binaries = list(pyexiv2_binaries)
+datas = list(pyexiv2_datas) + [("shaders/adjust.frag", "shaders")]
+
+_DEFAULT_TJ = r"C:\libjpeg-turbo64\bin\turbojpeg.dll" if sys.platform == "win32" else ""
+_DEFAULT_JT = r"C:\libjpeg-turbo64\bin\jpegtran.exe" if sys.platform == "win32" else ""
+for env, default in (("TURBOJPEG_DLL", _DEFAULT_TJ), ("JPEGTRAN_EXE", _DEFAULT_JT)):
+    p = os.environ.get(env, default)
+    if p and os.path.exists(p):
+        binaries.append((p, "."))
+
+a = Analysis(
+    ["app.py"],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=pyexiv2_hidden,
+    excludes=["tkinter"],
+)
+pyz = PYZ(a.pure)
+
+icon = "build/photoflow.ico" if os.path.exists("build/photoflow.ico") else None
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    exclude_binaries=True,
+    name="photoflow",
+    console=False,
+    icon=icon,
+)
+coll = COLLECT(exe, a.binaries, a.datas, name="photoflow")

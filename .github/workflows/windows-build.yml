@@ -1,0 +1,76 @@
+name: windows-build
+
+# Builds a Windows one-dir bundle with PyInstaller. Runs on demand
+# (workflow_dispatch) and on v* tags, where it also attaches the zip to a
+# GitHub release. The headless test suite runs first as a Windows
+# compatibility gate — it exercises decode/EXIF/catalog/render/export off-GUI.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python deps
+        run: uv sync
+
+      - name: Install libjpeg-turbo (turbojpeg.dll + jpegtran.exe)
+        shell: pwsh
+        run: |
+          $v = "3.2.0"
+          $url = "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$v/libjpeg-turbo-$v-vc-x64.exe"
+          Invoke-WebRequest $url -OutFile libjpeg-turbo-installer.exe
+          Start-Process -Wait .\libjpeg-turbo-installer.exe -ArgumentList "/S"
+          "C:\libjpeg-turbo64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Headless test suite (Windows compatibility gate)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run python tests/verify_headless.py
+
+      - name: Render app icon
+        run: uv run python scripts/make_ico.py
+
+      - name: Build with PyInstaller
+        run: uv run pyinstaller photoflow.spec --noconfirm
+
+      - name: Sanity-check bundle contents
+        shell: pwsh
+        run: |
+          $need = @(
+            "dist/photoflow/photoflow.exe",
+            "dist/photoflow/_internal/turbojpeg.dll",
+            "dist/photoflow/_internal/jpegtran.exe",
+            "dist/photoflow/_internal/shaders/adjust.frag"
+          )
+          foreach ($f in $need) {
+            if (!(Test-Path $f)) { throw "bundle is missing $f" }
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photoflow-windows-x64
+          path: dist/photoflow
+
+      - name: Zip for release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: Compress-Archive -Path dist/photoflow -DestinationPath photoflow-windows-x64.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: photoflow-windows-x64.zip
