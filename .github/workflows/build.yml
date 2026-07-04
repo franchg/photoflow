@@ -1,0 +1,138 @@
+name: build
+
+# Packaged builds: Windows one-dir zip + Linux one-file binary. Runs on
+# demand (workflow_dispatch) and on v* tags, where the release job attaches
+# both archives to the GitHub release. Each platform job runs the headless
+# test suite first as a compatibility gate — it exercises
+# decode/EXIF/catalog/render/export off-GUI.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"  # piped stdout on Windows defaults to cp1252, which
+                       # cannot print the test suite's Unicode check names
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install Python deps
+        run: uv sync
+
+      - name: Install libjpeg-turbo (turbojpeg.dll + jpegtran.exe)
+        shell: pwsh
+        run: |
+          $v = "3.2.0"
+          $url = "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/$v/libjpeg-turbo-$v-vc-x64.exe"
+          Invoke-WebRequest $url -OutFile libjpeg-turbo-installer.exe
+          Start-Process -Wait .\libjpeg-turbo-installer.exe -ArgumentList "/S"
+          "C:\libjpeg-turbo64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Headless test suite (Windows compatibility gate)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run python tests/verify_headless.py
+
+      - name: Render app icon
+        run: uv run python scripts/make_ico.py
+
+      - name: Build with PyInstaller (one-dir)
+        run: uv run pyinstaller photoflow.spec --noconfirm
+
+      - name: Sanity-check bundle contents
+        shell: pwsh
+        run: |
+          $need = @(
+            "dist/photoflow/photoflow.exe",
+            "dist/photoflow/_internal/turbojpeg.dll",
+            "dist/photoflow/_internal/jpegtran.exe",
+            "dist/photoflow/_internal/shaders/adjust.frag"
+          )
+          foreach ($f in $need) {
+            if (!(Test-Path $f)) { throw "bundle is missing $f" }
+          }
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist/photoflow -DestinationPath photoflow-windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photoflow-windows-x64
+          path: photoflow-windows-x64.zip
+
+  linux:
+    # oldest still-supported LTS runner → oldest glibc the binary links
+    # against → it runs on more distros
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install system deps (libjpeg-turbo, jpegtran, Qt runtime libs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libturbojpeg libjpeg-turbo-progs \
+            libegl1 libgl1 libxkbcommon0 libfontconfig1 libglib2.0-0 libdbus-1-3
+
+      - name: Install Python deps
+        run: uv sync
+
+      - name: Headless test suite (Linux compatibility gate)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run python tests/verify_headless.py
+
+      - name: Build with PyInstaller (one-file)
+        env:
+          PHOTOFLOW_ONEFILE: "1"
+        run: JPEGTRAN_EXE=$(which jpegtran) uv run pyinstaller photoflow.spec --noconfirm
+
+      - name: Sanity-check bundle contents and launch
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          uv run pyi-archive_viewer --list --brief dist/photoflow > contents.txt
+          for need in libturbojpeg.so jpegtran shaders/adjust.frag exiv2api; do
+            grep -q "$need" contents.txt || { echo "bundle is missing $need"; exit 1; }
+          done
+          # exit 124 = the app was still running when timeout hit (i.e. it started)
+          timeout 10 ./dist/photoflow && exit 1 || [ $? -eq 124 ]
+
+      - name: Tar (preserves the executable bit through artifact transfer)
+        run: tar -C dist -czf photoflow-linux-x64.tar.gz photoflow
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photoflow-linux-x64
+          path: photoflow-linux-x64.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            photoflow-windows-x64.zip
+            photoflow-linux-x64.tar.gz

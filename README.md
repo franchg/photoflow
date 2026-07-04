@@ -23,13 +23,17 @@ default `C:\libjpeg-turbo64` location) and run the same `uv sync` /
 `uv run python app.py`. Trash goes to the Recycle Bin, settings to the
 registry, and the catalog/cache to `%LOCALAPPDATA%\photoflow`.
 
-A packaged build (no Python required) comes from PyInstaller:
-`photoflow.spec` produces a windowed one-dir bundle with `turbojpeg.dll`,
-`jpegtran.exe`, the exiv2 runtime and the GLSL shader inside; the exe icon is
-rendered from the in-code SVG by `scripts/make_ico.py`. The
-`windows-build` GitHub Actions workflow builds it on `windows-latest`
-(manual dispatch, or a `v*` tag which also attaches the zip to a release),
-running the headless test suite first as a Windows compatibility gate.
+Packaged builds (no Python required) come from PyInstaller.
+`photoflow.spec` produces a windowed one-dir bundle with the native pieces
+inside (`turbojpeg`, `jpegtran`, the exiv2 runtime, the GLSL shader; the exe
+icon is rendered from the in-code SVG by `scripts/make_ico.py`); with
+`PHOTOFLOW_ONEFILE=1` it produces a single self-extracting binary instead.
+The `build` GitHub Actions workflow makes both release archives — a Windows
+one-dir zip and a Linux one-file binary (built on the oldest LTS runner for
+glibc compatibility, `.tar.gz` to keep the executable bit) — on manual
+dispatch or a `v*` tag, which also attaches them to the GitHub release.
+Each platform job runs the headless test suite first as a compatibility
+gate.
 
 ## Settings
 

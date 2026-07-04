@@ -1,4 +1,6 @@
-# PyInstaller spec for photoflow (one-dir, windowed).
+# PyInstaller spec for photoflow (windowed). One-dir by default; set
+# PHOTOFLOW_ONEFILE=1 for a single self-extracting binary (the Linux
+# release build — slower startup, but one file to ship).
 #
 # Native pieces that PyInstaller cannot discover on its own:
 #   - turbojpeg (loaded via ctypes by PyTurboJPEG) — path taken from
@@ -40,12 +42,23 @@ pyz = PYZ(a.pure)
 
 icon = "build/photoflow.ico" if os.path.exists("build/photoflow.ico") else None
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    exclude_binaries=True,
-    name="photoflow",
-    console=False,
-    icon=icon,
-)
-coll = COLLECT(exe, a.binaries, a.datas, name="photoflow")
+if os.environ.get("PHOTOFLOW_ONEFILE") == "1":
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        name="photoflow",
+        console=False,
+        icon=icon,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        exclude_binaries=True,
+        name="photoflow",
+        console=False,
+        icon=icon,
+    )
+    coll = COLLECT(exe, a.binaries, a.datas, name="photoflow")
