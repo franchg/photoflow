@@ -16,6 +16,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"  # piped stdout on Windows defaults to cp1252, which
+                       # cannot print the test suite's Unicode check names
     steps:
       - uses: actions/checkout@v4
 
