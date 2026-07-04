@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import sys
 from collections import OrderedDict
 
@@ -165,8 +166,12 @@ class MainWindow(QMainWindow):
         self._refresh_icons()
 
         folder = self.settings.value("last_folder")
-        if folder:
+        if folder and os.path.isdir(folder):
             QTimer.singleShot(0, lambda: self._scan(folder))
+        elif folder:
+            # the folder vanished since last run — a startup popup (or worse,
+            # one on every launch, since _scan re-persists) helps nobody
+            self.settings.remove("last_folder")
 
     def _refresh_icons(self) -> None:
         """(Re)tint all icons to the active theme's text color."""
@@ -403,8 +408,15 @@ class MainWindow(QMainWindow):
         self.grid.setFocus()
 
     def _on_scan_failed(self, gen: int, message: str) -> None:
-        if gen == self.workers.generation:
-            QMessageBox.warning(self, "Scan failed", message)
+        if gen != self.workers.generation:
+            return
+        # Non-modal: a failed scan must never block the window from showing.
+        self.statusBar().showMessage(f"Scan failed: {message}", 8000)
+        if self._current_folder and not os.path.isdir(self._current_folder):
+            if self.settings.value("last_folder") == self._current_folder:
+                self.settings.remove("last_folder")
+            self._current_folder = None
+            self.setWindowTitle("photoflow")
 
     def _update_count(self) -> None:
         """Bridge-style: 'N items, M hidden, X selected - ZZ.Z MB'."""

@@ -28,8 +28,15 @@ import app as photoflow_app  # noqa: E402
 from editstack import EditStack, Op  # noqa: E402
 from PySide6.QtCore import QSettings  # noqa: E402
 
-# Hermetic settings: drop every persisted preference the tests assert on
-# (last_folder's queued auto-scan would also race the test's own scan).
+# Fully isolated settings: redirect ALL user-scope QSettings of this process
+# into a temp dir, so the tests can neither read nor pollute the real
+# preferences (a leaked last_folder pointing at a deleted smoke dir once
+# broke real startups with a popup).
+QSettings.setPath(QSettings.Format.NativeFormat, QSettings.Scope.UserScope,
+                  tempfile.mkdtemp(prefix="photoflow-smoke-settings-"))
+
+# Belt over suspenders: also drop every persisted preference the tests
+# assert on (last_folder's queued auto-scan would race the test's own scan).
 _settings = QSettings("photoflow", "photoflow")
 for _key in ("last_folder", "folders_visible", "grid_size", "show_hidden",
              "catalog_path"):
@@ -389,6 +396,24 @@ pump(lambda: not any(e.has_edits for e in win.model.entries())
      what="catalog emptied")
 win.settings.remove("catalog_path")  # don't leak the temp path to real runs
 ok("catalog: relocate to new path + empty, both followed by clean rescan")
+
+# startup with a vanished last_folder: silent (no modal would-block popup),
+# nothing scanned, and the stale setting self-heals
+gone = tempfile.mkdtemp(prefix="photoflow-smoke-gone-")
+os.rmdir(gone)
+_settings.setValue("last_folder", gone)
+_settings.setValue("catalog_path", os.path.join(folder, "startup-test.db"))
+_settings.sync()
+win2 = photoflow_app.MainWindow()
+win2.show()
+for _ in range(30):
+    app.processEvents()
+    time.sleep(0.02)
+assert win2.model.rowCount() == 0
+assert not _settings.value("last_folder"), _settings.value("last_folder")
+win2.close()
+app.processEvents()
+ok("startup with vanished last_folder: silent, setting cleared")
 
 win.close()
 app.processEvents()
