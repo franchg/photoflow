@@ -19,7 +19,7 @@ from editstack import EditStack, Op
 # Snapseed's Tune Image set, in its order. The stack key for Brightness stays
 # "exposure" (schema compat); "hue" remains valid in stacks but has no slider.
 PANEL_KEYS = ("exposure", "contrast", "saturation", "ambiance",
-              "highlights", "shadows", "temperature")
+              "highlights", "shadows", "temperature", "tint")
 SLIDER_LABELS = {
     "exposure": "Brightness",
     "contrast": "Contrast",
@@ -28,6 +28,7 @@ SLIDER_LABELS = {
     "highlights": "Highlights",
     "shadows": "Shadows",
     "temperature": "Temperature",
+    "tint": "Tint",
 }
 
 
@@ -38,6 +39,7 @@ class StackPanel(QWidget):
     paste_append_requested = Signal()
     apply_last_requested = Signal()
     crop_requested = Signal()             # start interactive crop in the viewer
+    wb_pick_requested = Signal()          # start the WB eyedropper in the viewer
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -58,10 +60,16 @@ class StackPanel(QWidget):
         self._btn_crop = QPushButton("Crop")
         self._btn_crop.setToolTip("Drag a crop on the image (C) — Enter applies, Esc cancels")
         self._btn_crop.clicked.connect(self.crop_requested)
+        self._btn_wb = QPushButton("WB")
+        self._btn_wb.setToolTip(
+            "White balance: click a spot that should be neutral gray (W) — "
+            "Esc cancels")
+        self._btn_wb.clicked.connect(self.wb_pick_requested)
         self._btn_clear = QPushButton("Clear")
         self._btn_clear.setToolTip("Remove every op from the stack")
         self._btn_clear.clicked.connect(self._clear)
-        for b in (self._btn_rotate, self._btn_crop, self._btn_clear):
+        for b in (self._btn_rotate, self._btn_crop, self._btn_wb,
+                  self._btn_clear):
             ops_row.addWidget(b)
         root.addLayout(ops_row)
 
@@ -95,7 +103,7 @@ class StackPanel(QWidget):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(-100, 100)
             slider.setValue(0)
-            value = QLabel("0.00")
+            value = QLabel("0")
             value.setMinimumWidth(38)
             value.setAlignment(Qt.AlignmentFlag.AlignRight)
             slider.valueChanged.connect(lambda v, k=key: self._slider_changed(k, v))
@@ -139,6 +147,7 @@ class StackPanel(QWidget):
     def set_icons(self, icon) -> None:
         """icon: callable(name) -> QIcon, tinted to the active theme."""
         for btn, name in ((self._btn_rotate, "rotate"), (self._btn_crop, "crop"),
+                          (self._btn_wb, "pipette"),
                           (self._btn_clear, "trash"), (self._btn_up, "chevron-up"),
                           (self._btn_down, "chevron-down"), (self._btn_remove, "x"),
                           (self._btn_reset, "rotate-ccw"), (self._btn_copy, "copy"),
@@ -186,7 +195,8 @@ class StackPanel(QWidget):
             self._sliders[key].blockSignals(True)
             self._sliders[key].setValue(round(v * 100))
             self._sliders[key].blockSignals(False)
-            self._value_labels[key].setText(f"{v:+.2f}" if v else "0.00")
+            n = round(v * 100)
+            self._value_labels[key].setText(f"{n:+d}" if n else "0")
 
     # -- edits ------------------------------------------------------------------
 
@@ -211,7 +221,7 @@ class StackPanel(QWidget):
             tune.params[key] = v
         else:
             tune.params.pop(key, None)
-        self._value_labels[key].setText(f"{v:+.2f}" if v else "0.00")
+        self._value_labels[key].setText(f"{raw:+d}" if raw else "0")
         row = self._stack.ops.index(tune)
         if row < self._list.count():
             self._list.blockSignals(True)
@@ -248,6 +258,25 @@ class StackPanel(QWidget):
             return
         self._stack.append(Op("crop", {"rect": list(rect)}))
         self._rebuild_list()
+        self._emit(final=True)
+
+    def apply_wb(self, temperature: float, tint: float) -> None:
+        """Commit path for the viewer's WB eyedropper. The solve is for the
+        whole render, so the edited op is set to whatever makes the *folded*
+        temperature/tint land on the solved values."""
+        if self._fid is None:
+            return
+        tune = self._ensure_tune()
+        folded = self._stack.folded_tune()
+        for key, target in (("temperature", temperature), ("tint", tint)):
+            others = getattr(folded, key) - tune.params.get(key, 0.0)
+            v = max(-1.0, min(1.0, round(target - others, 4)))
+            if v:
+                tune.params[key] = v
+            else:
+                tune.params.pop(key, None)
+        self._rebuild_list()
+        self._load_sliders()
         self._emit(final=True)
 
     def _clear(self) -> None:

@@ -212,6 +212,30 @@ def main() -> None:
           out_sh[0, 0, 0] > 0.30 and abs(out_sh[0, 1, 0] - 0.85) < 0.02,
           str(out_sh))
 
+    # white-balance eyedropper: the solve neutralizes the picked pixel, and
+    # every stage after wb maps neutral to neutral, so it stays gray through
+    # a full slider load-out
+    check("wb solve neutral is identity",
+          render.solve_white_balance((0.5, 0.5, 0.5)) == (0.0, 0.0))
+    warm = np.array([[[0.62, 0.55, 0.50]]], dtype=np.float32)
+    t, n = render.solve_white_balance(warm[0, 0])
+    check("wb solve inside param range", -1 < t < 0 and -1 < n < 1, f"{t} {n}")
+    wb_u = render.TuneUniforms(
+        EditStack([Op("tune", {"temperature": t, "tint": n, "exposure": 0.2,
+                               "contrast": 0.3, "saturation": 0.4,
+                               "highlights": -0.2, "shadows": 0.3,
+                               "hue": 0.2})]).folded_tune())
+    out_wb = render.apply_tune(warm.copy(), wb_u)
+    check("wb solve renders picked pixel gray",
+          float(out_wb.max() - out_wb.min()) < 1.5 / 255.0, str(out_wb))
+    ct, cn = render.solve_white_balance((0.9, 0.5, 0.2))
+    check("wb solve clamps strong casts", ct == -1.0 and -1.0 <= cn <= 1.0,
+          f"{ct} {cn}")
+    wbf = EditStack([Op("tune", {"temperature": 0.2, "tint": 0.1}),
+                     Op("tune", {"temperature": 0.1, "tint": -0.4})]).folded_tune()
+    check("fold tint sums", abs(wbf.temperature - 0.3) < 1e-9
+          and abs(wbf.tint + 0.3) < 1e-9)
+
     g = render.apply_geometry(full, geo)  # rotate 90CW then center 50% crop
     check("apply_geometry dims", g.shape == (320, 240, 3), str(g.shape))
 

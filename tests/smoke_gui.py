@@ -190,6 +190,33 @@ win.viewer.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
 assert not win.viewer.in_crop_mode
 ok("interactive crop: Esc cancels")
 
+# WB eyedropper: click → the stack's folded temperature/tint land exactly on
+# the solve for the sampled pixel; Esc cancels the mode
+from render import solve_white_balance  # noqa: E402
+
+pump(lambda: win.viewer._sample_image is not None, what="viewer texture image")
+win._start_wb_pick()
+assert win.viewer.in_wb_pick_mode
+wb_pos = win.viewer._frame_rect_logical().center()
+expected = solve_white_balance(win.viewer._sample_source_rgb(wb_pos))
+win.viewer.mousePressEvent(_mev(QEvent.Type.MouseButtonPress, wb_pos,
+                                Qt.MouseButton.LeftButton))
+app.processEvents()
+assert not win.viewer.in_wb_pick_mode
+f_wb = win.panel.current_stack().folded_tune()
+assert (abs(f_wb.temperature - expected[0]) < 0.01
+        and abs(f_wb.tint - expected[1]) < 0.01), (f_wb, expected)
+fid_wb = win.viewer.current_fid
+if any(abs(v) >= 0.005 for v in expected):
+    pump(lambda: (s := win.catalog.get_stack(fid_wb))
+         and ('"temperature"' in s or '"tint"' in s), what="wb persisted")
+win._start_wb_pick()
+assert win.viewer.in_wb_pick_mode
+win.viewer.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                   Qt.KeyboardModifier.NoModifier))
+assert not win.viewer.in_wb_pick_mode
+ok("WB eyedropper: click solves temperature/tint, persists, Esc cancels")
+
 # fullscreen: F from the grid enters and exits (window shortcut), chrome hides
 from PySide6.QtTest import QTest  # noqa: E402
 

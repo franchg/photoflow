@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 import styles
 from catalog import Catalog
 from editstack import EditClipboard, EditStack, StackError, StackHistory
+from render import solve_white_balance
 from export import ExportDialog, Exporter, ExportItem
 from models import (FLAG_NONE, FLAG_PICK, FLAG_REJECT, FileListModel,
                     FilterProxy, IdRole, SORT_DATE, SORT_NAME)
@@ -143,11 +144,15 @@ class MainWindow(QMainWindow):
         self.viewer.close_requested.connect(self._close_viewer)
         self.viewer.needs_full_res.connect(self._request_full_res)
         self.viewer.crop_committed.connect(self._commit_crop)
+        self.viewer.wb_picked.connect(self._commit_wb_pick)
+        self.viewer.wb_pick_canceled.connect(
+            lambda: self.statusBar().clearMessage())
         self.viewer.crop_canceled.connect(
             lambda: self.statusBar().clearMessage())
 
         self.panel.stack_edited.connect(self._on_stack_edited)
         self.panel.crop_requested.connect(self._start_crop)
+        self.panel.wb_pick_requested.connect(self._start_wb_pick)
         self.panel.copy_requested.connect(self._copy_edits)
         self.panel.paste_replace_requested.connect(lambda: self._paste_edits(False))
         self.panel.paste_append_requested.connect(lambda: self._paste_edits(True))
@@ -280,6 +285,7 @@ class MainWindow(QMainWindow):
                   activated=lambda: self._paste_edits(True))
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self._apply_last_edit)
         QShortcut(QKeySequence("C"), self, activated=self._start_crop)
+        QShortcut(QKeySequence("W"), self, activated=self._start_wb_pick)
         QShortcut(QKeySequence("F"), self, activated=self._toggle_fullscreen)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self,
                   activated=self._toggle_fullscreen)
@@ -596,7 +602,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ culling
 
     def _delete_selected(self) -> None:
-        if self.viewer.in_crop_mode:
+        if self.viewer.in_crop_mode or self.viewer.in_wb_pick_mode:
             return
         entries = self._selected_entries()
         if not entries:
@@ -667,6 +673,25 @@ class MainWindow(QMainWindow):
         fid = self.viewer.current_fid
         if fid is not None and fid == self.panel.current_fid:
             self.panel.append_crop(rect)
+
+    # ------------------------------------------------------------ WB eyedropper
+
+    def _start_wb_pick(self) -> None:
+        if (self._current_entry() is None or self.viewer.in_crop_mode
+                or self.viewer.in_wb_pick_mode):
+            return
+        if self.stacked.currentIndex() != PAGE_VIEWER:
+            self._open_viewer()
+        self.viewer.begin_wb_pick()
+        self.statusBar().showMessage(
+            "White balance: click a spot that should be neutral gray — "
+            "Esc cancels")
+
+    def _commit_wb_pick(self, r: float, g: float, b: float) -> None:
+        self.statusBar().clearMessage()
+        fid = self.viewer.current_fid
+        if fid is not None and fid == self.panel.current_fid:
+            self.panel.apply_wb(*solve_white_balance((r, g, b)))
 
     # ------------------------------------------------------------------- editing
 

@@ -16,7 +16,7 @@ STACK_VERSION = 1
 # color ("colorful and happy"), -1 goes contrasty and desaturated. "hue" has
 # no slider anymore but stays valid for existing stacks.
 TUNE_KEYS = ("exposure", "contrast", "saturation", "ambiance",
-             "highlights", "shadows", "temperature", "hue")
+             "highlights", "shadows", "temperature", "tint", "hue")
 OP_TYPES = ("rotate", "crop", "tune")
 
 
@@ -48,7 +48,7 @@ class Op:
         if self.op == "crop":
             x, y, w, h = self.params["rect"]
             return f"Crop {w * 100:.0f}×{h * 100:.0f}%"
-        parts = [f"{k[:3]} {v:+.2f}" for k, v in self.params.items() if v]
+        parts = [f"{k[:3]} {round(v * 100):+d}" for k, v in self.params.items() if v]
         return "Tune " + (", ".join(parts) if parts else "(neutral)")
 
 
@@ -83,6 +83,7 @@ class FoldedTune:
     preview shader is a single pass regardless of stack depth."""
     exposure: float = 0.0          # sums, in [-1, 1] units (render maps to EV)
     temperature: float = 0.0       # sums
+    tint: float = 0.0              # sums
     hue: float = 0.0               # sums
     ambiance: float = 0.0          # sums
     highlights: float = 0.0        # sums
@@ -91,7 +92,8 @@ class FoldedTune:
     saturation_factor: float = 1.0 # multiplies
 
     def is_identity(self) -> bool:
-        return (self.exposure == 0 and self.temperature == 0 and self.hue == 0
+        return (self.exposure == 0 and self.temperature == 0 and self.tint == 0
+                and self.hue == 0
                 and self.ambiance == 0 and self.highlights == 0
                 and self.shadows == 0
                 and self.contrast_factor == 1.0 and self.saturation_factor == 1.0)
@@ -199,6 +201,7 @@ class EditStack:
             p = op.params
             f.exposure += p.get("exposure", 0.0)
             f.temperature += p.get("temperature", 0.0)
+            f.tint += p.get("tint", 0.0)
             f.hue += p.get("hue", 0.0)
             f.ambiance += p.get("ambiance", 0.0)
             f.highlights += p.get("highlights", 0.0)

@@ -101,6 +101,8 @@ class ViewerWidget(QOpenGLWidget):
     close_requested = Signal()     # Esc
     crop_committed = Signal(object)  # [x, y, w, h] in the current visible frame
     crop_canceled = Signal()
+    wb_picked = Signal(float, float, float)  # source-space sRGB under the click
+    wb_pick_canceled = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -132,6 +134,10 @@ class ViewerWidget(QOpenGLWidget):
         self._crop_rect = [0.0, 0.0, 1.0, 1.0]  # normalized in visible frame
         self._crop_drag = None           # (handle, start QPointF, start rect)
 
+        # white-balance eyedropper mode
+        self._wb_pick = False
+        self._sample_image = None        # CPU copy of the texture, for picking
+
     # ------------------------------------------------------------------ API
 
     def show_image(self, fid: int, full_w: int, full_h: int,
@@ -146,6 +152,10 @@ class ViewerWidget(QOpenGLWidget):
             self._crop_mode = False
             self._crop_drag = None
             self.unsetCursor()
+        if self._wb_pick:                # ... and the pending WB pick
+            self._wb_pick = False
+            self.unsetCursor()
+        self._sample_image = None
         self._release_texture()
         self.set_stack(stack, _repaint=False)
         self._fit = True
@@ -157,6 +167,7 @@ class ViewerWidget(QOpenGLWidget):
         if level < self._tex_level:
             return  # never replace a texture with a lesser one
         self._pending_image = image
+        self._sample_image = image       # QImage is shared, this is a cheap ref
         self._tex_level = level
         if not self._full_w:
             self._full_w, self._full_h = image.width(), image.height()
@@ -199,6 +210,53 @@ class ViewerWidget(QOpenGLWidget):
         self._crop_drag = None
         self._fit = True
         self.update()
+
+    # ------------------------------------------------------ WB eyedropper
+
+    @property
+    def in_wb_pick_mode(self) -> bool:
+        return self._wb_pick
+
+    def begin_wb_pick(self) -> None:
+        """Enter eyedropper mode: the next click on the image emits the
+        source-space color under the cursor; Esc cancels."""
+        if self._wb_pick or self._crop_mode or self._fid is None:
+            return
+        self._wb_pick = True
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def _end_wb_pick(self, rgb: tuple[float, float, float] | None) -> None:
+        self._wb_pick = False
+        self.unsetCursor()
+        if rgb is not None:
+            self.wb_picked.emit(*rgb)
+        else:
+            self.wb_pick_canceled.emit()
+
+    def _sample_source_rgb(self, pos: QPointF) -> tuple[float, float, float] | None:
+        """Mean sRGB (0..1) of a small source-image patch under a widget
+        point, or None outside the frame / before the texture arrived."""
+        img = self._sample_image
+        if img is None or img.isNull():
+            return None
+        f = self._frame_rect_logical()
+        if f.width() <= 0 or f.height() <= 0 or not f.contains(pos):
+            return None
+        # visible-frame coords → source UV, exactly as the shader's u_uv
+        frame = np.array([(pos.x() - f.x()) / f.width(),
+                          (pos.y() - f.y()) / f.height(), 1.0])
+        u, v, _ = self._uv_matrix() @ frame
+        px = min(max(int(u * img.width()), 0), img.width() - 1)
+        py = min(max(int(v * img.height()), 0), img.height() - 1)
+        rad = 2  # 5×5 patch: noise-robust, still "the pixel you clicked"
+        acc = np.zeros(3)
+        n = 0
+        for yy in range(max(0, py - rad), min(img.height(), py + rad + 1)):
+            for xx in range(max(0, px - rad), min(img.width(), px + rad + 1)):
+                c = img.pixelColor(xx, yy)
+                acc += (c.redF(), c.greenF(), c.blueF())
+                n += 1
+        return tuple(acc / n)
 
     def _finish_crop(self, commit: bool) -> None:
         rect = list(self._crop_rect)
@@ -339,6 +397,12 @@ class ViewerWidget(QOpenGLWidget):
 
     # -- geometry helpers ---------------------------------------------------
 
+    def _uv_matrix(self) -> np.ndarray:
+        """Visible-frame [0,1]² → source-texture UV (rotation + crop)."""
+        cx, cy, cw, ch = self._geo.rect
+        crop = np.array([[cw, 0, cx], [0, ch, cy], [0, 0, 1]], dtype=np.float64)
+        return _ROT_INV[self._geo.cw_degrees % 360] @ crop
+
     def _display_size(self) -> tuple[float, float]:
         """Displayed region size in full-res source pixels (rotate + crop)."""
         w, h = self._full_w, self._full_h
@@ -402,9 +466,7 @@ class ViewerWidget(QOpenGLWidget):
         mvp.translate(x, y)
         mvp.scale(w, h)
 
-        cx, cy, cw, ch = self._geo.rect
-        crop = np.array([[cw, 0, cx], [0, ch, cy], [0, 0, 1]], dtype=np.float64)
-        uv = _ROT_INV[self._geo.cw_degrees % 360] @ crop
+        uv = self._uv_matrix()
 
         prog = self._program
         prog.bind()
@@ -462,6 +524,11 @@ class ViewerWidget(QOpenGLWidget):
             if handle:
                 self._crop_drag = (handle, ev.position(), list(self._crop_rect))
             return
+        if self._wb_pick:
+            rgb = self._sample_source_rgb(ev.position())
+            if rgb is not None:          # clicks off the image keep the mode
+                self._end_wb_pick(rgb)
+            return
         self._drag_start = ev.position()
         self._pan_start = QPointF(self._pan)
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -481,6 +548,8 @@ class ViewerWidget(QOpenGLWidget):
                 else:
                     self.unsetCursor()
             return
+        if self._wb_pick:
+            return                        # keep the cross cursor, no panning
         if self._drag_start is not None:
             dpr = self.devicePixelRatioF()
             delta = (ev.position() - self._drag_start) * dpr
@@ -490,6 +559,8 @@ class ViewerWidget(QOpenGLWidget):
     def mouseReleaseEvent(self, ev) -> None:
         if self._crop_mode:
             self._crop_drag = None
+            return
+        if self._wb_pick:
             return
         self._drag_start = None
         self.unsetCursor()
@@ -501,6 +572,10 @@ class ViewerWidget(QOpenGLWidget):
                 self._finish_crop(True)
             elif k == Qt.Key.Key_Escape:
                 self._finish_crop(False)
+            ev.accept()
+            return
+        if self._wb_pick and k == Qt.Key.Key_Escape:
+            self._end_wb_pick(None)
             ev.accept()
             return
         if k in (Qt.Key.Key_Left, Qt.Key.Key_Up):

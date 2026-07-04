@@ -6,7 +6,7 @@ shader line by line — keep them in sync when touching either.
 
 Pipeline (PLAN.md "Render pipeline", extended with the Snapseed tune set):
   1. brightness rgb *= exp2(exposure * K_EXPOSURE_EV)      (linear space)
-  2. temp/WB    per-channel gains                          (linear space)
+  2. temp/tint  per-channel white-balance gains            (linear space)
   3. contrast   pivot 0.5 in linear-ish space (gamma 2.2)
   4. highlights/shadows: luma²-masked pull toward white/black (display space)
   5. saturation mix with Rec.709 luma                      (display space)
@@ -26,6 +26,7 @@ from editstack import EditStack, FoldedTune, Geometry
 
 K_EXPOSURE_EV = 3.0    # exposure param ±1 → ±3 stops
 K_TEMPERATURE = 0.30   # temperature param ±1 → ±30% R/B gain swing
+K_TINT = 0.30          # tint param ±1 → ±30% G gain swing (+1 = magenta)
 K_HUE_DEGREES = 180.0  # hue param ±1 → ±180°
 K_HIGHLIGHTS = 0.7     # strength of the highlights pull at ±1
 K_SHADOWS = 0.7        # strength of the shadows pull at ±1
@@ -39,11 +40,25 @@ GAMMA = 2.2
 LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
 
 
-def wb_gains(temperature: float) -> np.ndarray:
-    """Warm (t>0) boosts red / cuts blue; cool is the inverse. Gains multiply,
-    so summed temperature params map through exp for symmetric composition."""
+def wb_gains(temperature: float, tint: float = 0.0) -> np.ndarray:
+    """Warm (t>0) boosts red / cuts blue; cool is the inverse. Tint (n>0)
+    shifts toward magenta by cutting green. Gains multiply, so summed
+    params map through exp for symmetric composition."""
     t = temperature * K_TEMPERATURE
-    return np.array([math.exp(t), 1.0, math.exp(-t)], dtype=np.float32)
+    n = tint * K_TINT
+    return np.array([math.exp(t), math.exp(-n), math.exp(-t)], dtype=np.float32)
+
+
+def solve_white_balance(rgb) -> tuple[float, float]:
+    """(temperature, tint) that neutralize a source-space sRGB pixel — the
+    eyedropper. wb applies in linear space, and every stage after it maps
+    neutral to neutral, so the picked pixel renders exactly gray. Values are
+    clamped to the param range; a cast beyond ±30% gain is only reduced."""
+    eps = 1.0 / 255.0
+    r, g, b = (max(float(c), eps) ** GAMMA for c in rgb)
+    t = 0.5 * math.log(b / r)            # e^t·r == e^-t·b
+    n = math.log(g / r) - t              # e^-n·g == e^t·r
+    return _clamp1(t / K_TEMPERATURE), _clamp1(n / K_TINT)
 
 
 def hue_matrix(hue: float) -> np.ndarray:
@@ -69,7 +84,7 @@ class TuneUniforms:
     def __init__(self, folded: FoldedTune):
         amb = _clamp1(folded.ambiance)
         self.exp_gain = float(2.0 ** (folded.exposure * K_EXPOSURE_EV))
-        self.wb = wb_gains(folded.temperature)
+        self.wb = wb_gains(folded.temperature, folded.tint)
         self.contrast = max(0.0, float(
             folded.contrast_factor
             * (1.0 - K_AMBIANCE_CONTRAST * min(amb, 0.0))))

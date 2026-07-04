@@ -14,6 +14,23 @@ System requirements: `libturbojpeg` (`apt install libturbojpeg`), OpenGL 3.3+,
 and optionally `jpegtran` (`libjpeg-turbo-progs`) for lossless rotation export.
 Python dependencies are managed by uv (`uv sync`).
 
+## Windows
+
+The code is portable: on Windows, install
+[libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo/releases)
+(the official `-vc-x64.exe` installer; PyTurboJPEG finds the DLL in its
+default `C:\libjpeg-turbo64` location) and run the same `uv sync` /
+`uv run python app.py`. Trash goes to the Recycle Bin, settings to the
+registry, and the catalog/cache to `%LOCALAPPDATA%\photoflow`.
+
+A packaged build (no Python required) comes from PyInstaller:
+`photoflow.spec` produces a windowed one-dir bundle with `turbojpeg.dll`,
+`jpegtran.exe`, the exiv2 runtime and the GLSL shader inside; the exe icon is
+rendered from the in-code SVG by `scripts/make_ico.py`. The
+`windows-build` GitHub Actions workflow builds it on `windows-latest`
+(manual dispatch, or a `v*` tag which also attaches the zip to a release),
+running the headless test suite first as a Windows compatibility gate.
+
 ## Settings
 
 **Settings…** (Ctrl+,) covers:
@@ -45,6 +62,7 @@ Python dependencies are managed by uv (`uv sync`).
 | P / X / U | Pick / reject / unflag |
 | Z / double-click (viewer) | Fit ↔ 100 %; wheel zooms, drag pans |
 | C | Interactive crop: drag box/handles, Enter applies, Esc cancels |
+| W | White-balance eyedropper: click a spot that should be neutral gray (Esc cancels) |
 | Ctrl+Shift+C | Copy edit stack |
 | Ctrl+Shift+V | Paste edits onto selection (replace) |
 | Ctrl+Alt+Shift+V | Paste edits onto selection (append) |
@@ -59,8 +77,11 @@ Python dependencies are managed by uv (`uv sync`).
   math in numpy (`render.py` owns both, `tests/verify_shader.py` proves parity).
 - The tune op covers the Snapseed set: brightness, contrast, saturation,
   ambiance (+1 opens shadows and boosts color, -1 goes contrasty and muted),
-  highlights, shadows, temperature. Highlights/shadows apply a luma-masked
-  gain so lifted shadows keep their color.
+  highlights, shadows, temperature, tint. Highlights/shadows apply a
+  luma-masked gain so lifted shadows keep their color. The white-balance
+  eyedropper (W, or the WB button) samples the clicked source pixel and
+  solves temperature/tint in linear space so that pixel renders exactly
+  neutral — every stage after white balance maps neutral to neutral.
 - Thumbnails: EXIF-embedded thumbs paint first, then 1/8-scale libjpeg-turbo
   decodes replace them; everything is cached in SQLite keyed by
   `(path, mtime, size)`. The catalog lives in `~/.local/share/photoflow/`.

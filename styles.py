@@ -8,6 +8,7 @@ the active theme's text color — no binary assets anywhere.
 from __future__ import annotations
 
 import os
+import sys
 
 from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap
@@ -72,6 +73,9 @@ ICON_SVGS = {
                   '<path d="M4.5 15a8 8 0 1 0 1.9-8.4L3 10"/>',
     "crop": '<path d="M6 2v14a2 2 0 0 0 2 2h14"/>'
             '<path d="M2 6h14a2 2 0 0 1 2 2v14"/>',
+    "pipette": '<path d="m2 22 1-1h3l9-9"/><path d="M3 21v-3l9-9"/>'
+               '<path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4'
+               'a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/>',
     "trash": '<polyline points="3 6 5 6 21 6"/>'
              '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>'
              '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
@@ -139,8 +143,17 @@ def app_icon() -> QIcon:
 # ----------------------------------------------------------------------- QSS
 
 def _asset_dir() -> str:
-    base = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
-    d = os.path.join(base, "photoflow", "icons")
+    if sys.platform == "win32":
+        base = os.path.join(
+            os.environ.get("LOCALAPPDATA", os.path.expanduser("~/AppData/Local")),
+            "photoflow", "cache")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Caches/photoflow")
+    else:
+        base = os.path.join(
+            os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")),
+            "photoflow")
+    d = os.path.join(base, "icons")
     os.makedirs(d, exist_ok=True)
     return d
 
