@@ -38,6 +38,26 @@ a = Analysis(
     hiddenimports=pyexiv2_hidden,
     excludes=["tkinter"],
 )
+
+if sys.platform.startswith("linux"):
+    # The graphics/session stack must resolve from the *user's* system, never
+    # from the build machine: a bundled (older) glib/EGL/wayland shadows the
+    # system's, and then Mesa EGL and gio modules fail to load against it —
+    # "EGL not available" on Wayland means the window never appears at all.
+    # ".so"-anchored so Qt plugins like libdrm-egl-server.so don't match
+    _system_lib_prefixes = (
+        "libEGL.so", "libGL.so", "libGLX.so", "libGLX_", "libGLdispatch.so",
+        "libOpenGL.so", "libglapi.so", "libgbm.so", "libdrm.so",
+        "libwayland-client.so", "libwayland-cursor.so", "libwayland-egl.so",
+        "libwayland-server.so",
+        "libglib-2.0.so", "libgobject-2.0.so", "libgio-2.0.so",
+        "libgmodule-2.0.so", "libgthread-2.0.so",
+    )
+    a.binaries = [
+        entry for entry in a.binaries
+        if not os.path.basename(entry[0]).startswith(_system_lib_prefixes)
+    ]
+
 pyz = PYZ(a.pure)
 
 icon = "build/photoflow.ico" if os.path.exists("build/photoflow.ico") else None

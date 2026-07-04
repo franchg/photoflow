@@ -109,6 +109,13 @@ jobs:
           for need in libturbojpeg.so jpegtran shaders/adjust.frag exiv2api; do
             grep -q "$need" contents.txt || { echo "bundle is missing $need"; exit 1; }
           done
+          # system graphics stack must NOT be bundled (breaks EGL/gio on
+          # newer distros than the runner — no window on Wayland)
+          for bad in libEGL.so libGLX.so libglib-2.0 libgio-2.0 libwayland-client libgbm.so libdrm.so; do
+            if grep -q "$bad" contents.txt; then
+              echo "bundle must not ship $bad"; exit 1
+            fi
+          done
           # exit 124 = the app was still running when timeout hit (i.e. it started)
           timeout 10 ./dist/photoflow && exit 1 || [ $? -eq 124 ]
 
