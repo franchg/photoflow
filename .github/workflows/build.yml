@@ -139,8 +139,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Install libjpeg-turbo (dylib + jpegtran)
-        run: brew install jpeg-turbo
+      - name: Install libjpeg-turbo (dylib + jpegtran) + pyexiv2 dylib deps
+        # the pyexiv2 macOS wheel links Homebrew inih/brotli by absolute path
+        run: brew install jpeg-turbo inih brotli
 
       - name: Install Python deps
         run: uv sync
