@@ -7,8 +7,12 @@ non-destructive editing. See [PLAN.md](PLAN.md) for the full technical spec
 ## Run
 
 ```sh
-uv run python app.py
+uv run python app.py [folder | image]
 ```
+
+A folder argument opens it in the grid; an image argument opens its folder
+and shows that image fullscreen — which is what double-clicking an image in
+the file manager does once photoflow is the default viewer (see Settings).
 
 System requirements: `libturbojpeg` (`apt install libturbojpeg`), OpenGL 3.3+,
 and optionally `jpegtran` (`libjpeg-turbo-progs`) for lossless rotation export.
@@ -52,6 +56,9 @@ moving the binary is fine.
   native. Icons are feather-style SVGs embedded in code and tinted to the
   active theme at runtime — no binary assets.
 - **Browsing** — show hidden files and folders (folder tree + folder scans).
+- **File associations** (Linux) — make photoflow the system default viewer
+  for JPEG and PNG (`xdg-mime`; registers the launcher entry first, so it
+  also works from a source checkout).
 - **Catalog** — relocate the SQLite catalog (a new/existing catalog is opened
   at the chosen path; data is not moved), or **empty it** — this permanently
   deletes all edit stacks, ratings, flags and thumbnail caches (never source

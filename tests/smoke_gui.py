@@ -430,6 +430,24 @@ assert "Icon=photoflow" in _entry and "Exec=" in _entry, _entry
 photoflow_app._register_linux_desktop(reg_dir)  # idempotent re-run
 ok("desktop registration: launcher entry + theme icons written")
 
+# CLI open: a folder path lands in the grid, an image path goes fullscreen
+# on exactly that image (the Exec=%F double-click path)
+win.open_path(folder)
+pump(lambda: win.model.rowCount() > 1 and win._current_folder == folder,
+     what="open_path folder scan")
+assert not win._fullscreen and win.stacked.currentIndex() == 0
+img_target = win.model.entries()[1].path
+win.open_path(img_target)
+pump(lambda: win._fullscreen and (e := win._current_entry()) is not None
+     and e.path == img_target, what="open_path image fullscreen")
+assert win.isFullScreen() and win.stacked.currentIndex() == 1
+win._exit_fullscreen()
+app.processEvents()
+win.open_path(os.path.join(folder, "does-not-exist.jpg"))  # silently ignored
+app.processEvents()
+assert not win._fullscreen
+ok("open_path: folder → grid, image → fullscreen, bogus path ignored")
+
 win.close()
 app.processEvents()
 print("\nSMOKE PASS")

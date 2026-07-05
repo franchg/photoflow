@@ -22,7 +22,7 @@ THEME_MODES = ["system", "light", "dark"]
 
 class SettingsDialog(QDialog):
     def __init__(self, parent, *, theme: str, show_hidden: bool,
-                 catalog_path: str, on_empty_catalog):
+                 catalog_path: str, on_empty_catalog, on_set_default=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(460)
@@ -53,6 +53,19 @@ class SettingsDialog(QDialog):
             "Applies to the folder tree and to which JPEGs a folder scan picks up")
         blay.addWidget(self._hidden)
         root.addWidget(browsing)
+
+        if on_set_default is not None:  # Linux only: xdg-mime association
+            assoc = QGroupBox("File associations")
+            alay = QVBoxLayout(assoc)
+            default_btn = QPushButton("Make photoflow the default viewer "
+                                      "for JPEG and PNG")
+            default_btn.setToolTip(
+                "Registers the launcher entry and sets photoflow as the "
+                "xdg default handler — double-clicking an image opens it "
+                "fullscreen in photoflow")
+            default_btn.clicked.connect(on_set_default)
+            alay.addWidget(default_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+            root.addWidget(assoc)
 
         catalog = QGroupBox("Catalog")
         clay = QVBoxLayout(catalog)

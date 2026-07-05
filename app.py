@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+import subprocess
 import sys
 from collections import OrderedDict
 
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 
 import styles
 from catalog import Catalog
+from decode import SCAN_EXTENSIONS
 from editstack import EditClipboard, EditStack, StackError, StackHistory
 from render import solve_white_balance
 from export import ExportDialog, Exporter, ExportItem
@@ -62,7 +64,7 @@ def _entry_stack(entry) -> EditStack:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, initial_path: str | None = None):
         super().__init__()
         self.setWindowTitle("photoflow")
         self.resize(1440, 900)
@@ -80,6 +82,7 @@ class MainWindow(QMainWindow):
         self._fs_prev_page = PAGE_GRID
         self._fs_was_maximized = False
         self._current_folder: str | None = None
+        self._pending_open_file: str | None = None  # CLI image → fullscreen
 
         # -- models ---------------------------------------------------------
         self.model = FileListModel(self)
@@ -165,13 +168,16 @@ class MainWindow(QMainWindow):
         self._build_shortcuts()
         self._refresh_icons()
 
-        folder = self.settings.value("last_folder")
-        if folder and os.path.isdir(folder):
-            QTimer.singleShot(0, lambda: self._scan(folder))
-        elif folder:
-            # the folder vanished since last run — a startup popup (or worse,
-            # one on every launch, since _scan re-persists) helps nobody
-            self.settings.remove("last_folder")
+        if initial_path:
+            QTimer.singleShot(0, lambda: self.open_path(initial_path))
+        else:
+            folder = self.settings.value("last_folder")
+            if folder and os.path.isdir(folder):
+                QTimer.singleShot(0, lambda: self._scan(folder))
+            elif folder:
+                # the folder vanished since last run — a startup popup (or
+                # worse, one per launch since _scan re-persists) helps nobody
+                self.settings.remove("last_folder")
 
     def _refresh_icons(self) -> None:
         """(Re)tint all icons to the active theme's text color."""
@@ -197,11 +203,6 @@ class MainWindow(QMainWindow):
         tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(tb)
 
-        act_open = QAction("Open folder…", self)
-        act_open.setShortcut(QKeySequence.StandardKey.Open)
-        act_open.triggered.connect(self._pick_folder)
-        tb.addAction(act_open)
-
         self._folders_action = QAction("Folders", self)
         self._folders_action.setCheckable(True)
         show_tree = self.settings.value("folders_visible", True, type=bool)
@@ -209,6 +210,11 @@ class MainWindow(QMainWindow):
         self.tree.setVisible(show_tree)
         self._folders_action.toggled.connect(self._toggle_folder_tree)
         tb.addAction(self._folders_action)
+
+        act_open = QAction("Open folder…", self)
+        act_open.setShortcut(QKeySequence.StandardKey.Open)
+        act_open.triggered.connect(self._pick_folder)
+        tb.addAction(act_open)
         tb.addSeparator()
 
         self._size_group = QButtonGroup(self)
@@ -310,13 +316,34 @@ class MainWindow(QMainWindow):
     def _show_hidden_setting(self) -> bool:
         return self.settings.value("show_hidden", False, type=bool)
 
+    def _make_default_viewer(self) -> None:
+        """Register the desktop entry (dev runs too) and make it the system
+        default handler for JPEG and PNG via xdg-mime."""
+        try:
+            _register_linux_desktop(force=True)
+            result = subprocess.run(
+                ["xdg-mime", "default", "photoflow.desktop",
+                 "image/jpeg", "image/png"],
+                capture_output=True, text=True)
+        except OSError as e:
+            QMessageBox.warning(self, "Default viewer", str(e))
+            return
+        if result.returncode == 0:
+            self.statusBar().showMessage(
+                "photoflow is now the default viewer for JPEG and PNG", 6000)
+        else:
+            QMessageBox.warning(self, "Default viewer",
+                                result.stderr.strip() or "xdg-mime failed")
+
     def _open_settings(self) -> None:
         dlg = SettingsDialog(
             self,
             theme=str(self.settings.value("theme", "system")),
             show_hidden=self._show_hidden_setting(),
             catalog_path=self.catalog.db_path,
-            on_empty_catalog=self._empty_catalog)
+            on_empty_catalog=self._empty_catalog,
+            on_set_default=(self._make_default_viewer
+                            if sys.platform == "linux" else None))
         if dlg.exec() != SettingsDialog.DialogCode.Accepted:
             return
         v = dlg.values()
@@ -377,6 +404,17 @@ class MainWindow(QMainWindow):
         if folder != self._current_folder:
             self._scan(folder)
 
+    def open_path(self, path: str) -> None:
+        """CLI / file-manager entry (Exec=%F): a folder opens in the grid,
+        an image opens its parent folder and goes fullscreen on the image."""
+        path = os.path.abspath(path)
+        if os.path.isdir(path):
+            self._scan(path)
+        elif (os.path.isfile(path)
+              and os.path.splitext(path)[1].lower() in SCAN_EXTENSIONS):
+            self._pending_open_file = path
+            self._scan(os.path.dirname(path))
+
     def _scan(self, folder: str) -> None:
         self._current_folder = folder
         self.settings.setValue("last_folder", folder)
@@ -406,6 +444,15 @@ class MainWindow(QMainWindow):
         if self.proxy.rowCount():
             self.grid.setCurrentIndex(self.proxy.index(0, 0))
         self.grid.setFocus()
+        pending, self._pending_open_file = self._pending_open_file, None
+        if pending:
+            for row in range(self.proxy.rowCount()):
+                idx = self.proxy.index(row, 0)
+                e = self.model.entries()[self.proxy.mapToSource(idx).row()]
+                if e.path == pending:
+                    self.grid.setCurrentIndex(idx)
+                    self._enter_fullscreen()
+                    break
 
     def _on_scan_failed(self, gen: int, message: str) -> None:
         if gen != self.workers.generation:
@@ -876,18 +923,20 @@ def apply_theme(app: QApplication, mode: str) -> None:
         app.setPalette(_native_palette or QPalette())
 
 
-def _register_linux_desktop(data_home: str | None = None) -> None:
+def _register_linux_desktop(data_home: str | None = None, *,
+                            force: bool = False) -> None:
     """Install the launcher entry + theme icons for the packaged Linux binary.
 
     On Wayland the dock/taskbar icon comes from a .desktop file matched to
     the window's app id — a window icon alone shows as a generic gear. Runs
-    on every frozen start so Exec= follows the binary if it moves. Passing
-    data_home (tests) skips the frozen-only gate.
+    on every frozen start so Exec= follows the binary if it moves. force=True
+    (the default-viewer button) registers dev runs too; data_home overrides
+    the destination (tests).
     """
     if sys.platform != "linux":
         return
     if data_home is None:
-        if not getattr(sys, "frozen", False):
+        if not (force or getattr(sys, "frozen", False)):
             return
         data_home = os.environ.get("XDG_DATA_HOME",
                                    os.path.expanduser("~/.local/share"))
@@ -901,13 +950,16 @@ def _register_linux_desktop(data_home: str | None = None) -> None:
     png = os.path.join(sized, "photoflow.png")
     if not os.path.exists(png):
         styles.write_app_icon(png)
-    exe = os.path.realpath(sys.executable)
+    if getattr(sys, "frozen", False):
+        exec_cmd = f'"{os.path.realpath(sys.executable)}"'
+    else:  # dev run registered via the default-viewer button
+        exec_cmd = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
     entry = "\n".join((
         "[Desktop Entry]",
         "Type=Application",
         "Name=photoflow",
         "Comment=Fast JPEG/PNG browser, culling and non-destructive editor",
-        f'Exec="{exe}" %F',
+        f"Exec={exec_cmd} %F",
         "Icon=photoflow",
         "Terminal=false",
         "Categories=Graphics;Photography;Viewer;",
@@ -938,7 +990,10 @@ def main() -> int:
     capture_native_theme(app)
     theme = QSettings("photoflow", "photoflow").value("theme", "system")
     apply_theme(app, theme if theme in THEMES else "system")
-    win = MainWindow()
+    # photoflow [folder|image] — also the Exec=%F double-click path
+    target = next((a for a in app.arguments()[1:] if not a.startswith("-")),
+                  None)
+    win = MainWindow(initial_path=target)
     win.show()
     return app.exec()
 
