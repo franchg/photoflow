@@ -181,7 +181,8 @@ def measure(exports_dir: str) -> None:
         out[value] = dict(file=fn, samples=samples)
         print(f"measured {fn} as ambiance {value:+d}")
     if not out:
-        print("no usable exports found"); sys.exit(1)
+        print("no usable exports found")
+        sys.exit(1)
     dst = os.path.join(exports_dir, "measurements.json")
     with open(dst, "w") as f:
         json.dump(dict(width=W, height=H, regions=regions, exports=out), f)

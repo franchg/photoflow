@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QGridLayout,
-                               QLabel, QScrollArea, QVBoxLayout, QWidget)
+                               QHBoxLayout, QLabel, QScrollArea, QVBoxLayout,
+                               QWidget)
+
+from version import app_version
 
 SECTIONS = (
     ("Browse", (
@@ -88,7 +91,12 @@ class HelpDialog(QDialog):
         scroll.setWidget(body)
         root.addWidget(scroll)
 
+        footer = QHBoxLayout()
+        version = QLabel(f"photoflow {app_version()}")
+        version.setStyleSheet("color: palette(mid);")
+        footer.addWidget(version)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
-        root.addWidget(buttons)
+        footer.addWidget(buttons)
+        root.addLayout(footer)

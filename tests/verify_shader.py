@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import (QGuiApplication, QImage, QMatrix4x4,
-                           QOffscreenSurface, QOpenGLContext, QVector3D)
+                           QOffscreenSurface, QOpenGLContext)
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject,
                               QOpenGLShader, QOpenGLShaderProgram,
                               QOpenGLTexture, QOpenGLVertexArrayObject)
@@ -38,7 +38,7 @@ def check(name, cond, detail=""):
 
 
 def main():
-    app = QGuiApplication(sys.argv)
+    _app = QGuiApplication(sys.argv)  # must stay referenced (Qt lifetime)
     fmt = default_gl_format()
     ctx = QOpenGLContext()
     ctx.setFormat(fmt)

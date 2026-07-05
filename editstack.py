@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 STACK_VERSION = 1
 
@@ -169,6 +169,16 @@ class EditStack:
             return EditStack([Op.from_dict(d) for d in doc.get("stack", [])])
         except (KeyError, TypeError, json.JSONDecodeError) as e:
             raise StackError(f"malformed stack JSON: {e}") from e
+
+    @staticmethod
+    def from_json_lenient(text: str | None) -> "EditStack":
+        """An unreadable stack degrades to no edits — the shared policy for
+        display paths (thumbs, viewer, export). Writers still use from_json
+        so corruption surfaces instead of silently erasing edits."""
+        try:
+            return EditStack.from_json(text)
+        except StackError:
+            return EditStack()
 
     def clone(self) -> "EditStack":
         return EditStack(copy.deepcopy(self.ops))

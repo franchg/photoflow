@@ -14,7 +14,7 @@ import time
 from collections import OrderedDict
 
 from PySide6.QtCore import QFile, QProcess, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import (QAction, QColor, QKeySequence, QPalette, QShortcut,
+from PySide6.QtGui import (QAction, QKeySequence, QPalette, QShortcut,
                            QSurfaceFormat)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QFileDialog, QLabel, QMainWindow, QMessageBox,
@@ -27,7 +27,7 @@ from catalog import Catalog
 from decode import SCAN_EXTENSIONS
 from desktopintegration import register_linux_desktop, set_default_viewer
 from theme import THEMES, apply_theme, capture_native_theme
-from editstack import EditClipboard, EditStack, StackError, StackHistory
+from editstack import EditClipboard, EditStack, StackHistory
 from render import solve_white_balance
 from export import Exporter, ExportItem
 from views.exportdialog import ExportDialog
@@ -61,10 +61,7 @@ def _fmt_size(n: int) -> str:
 
 
 def _entry_stack(entry) -> EditStack:
-    try:
-        return EditStack.from_json(entry.stack_json)
-    except StackError:
-        return EditStack()
+    return EditStack.from_json_lenient(entry.stack_json)
 
 
 class MainWindow(QMainWindow):

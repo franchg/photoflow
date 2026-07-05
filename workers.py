@@ -26,7 +26,7 @@ from PySide6.QtGui import QImage
 import decode
 import render
 from catalog import Catalog
-from editstack import EditStack, StackError
+from editstack import EditStack
 from models import FileEntry
 
 THUMB_LARGE = 1024
@@ -45,12 +45,7 @@ def _jpeg_to_qimage(blob: bytes) -> QImage:
 
 
 def _load_stack(stack_json: str | None) -> EditStack | None:
-    if not stack_json:
-        return None
-    try:
-        stack = EditStack.from_json(stack_json)
-    except StackError:
-        return None
+    stack = EditStack.from_json_lenient(stack_json)
     return stack if stack.has_edits() else None
 
 

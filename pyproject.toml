@@ -1,7 +1,9 @@
 [project]
+# version is the single source of truth: the app shows it (version.py) and
+# the build workflow refuses release tags that don't match it.
 name = "photoflow"
-version = "0.1.0"
-description = "Fast native Linux app for JPEG browsing, culling, and non-destructive editing"
+version = "0.2.3"
+description = "Fast native app (Linux/Windows/macOS) for JPEG/PNG browsing, culling, and non-destructive editing"
 requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.6",

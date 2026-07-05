@@ -23,7 +23,8 @@ pyexiv2_datas, pyexiv2_binaries, pyexiv2_hidden = collect_all("pyexiv2")
 
 binaries = list(pyexiv2_binaries)
 datas = list(pyexiv2_datas) + [("shaders/adjust.frag", "shaders"),
-                               ("fonts", "fonts")]
+                               ("fonts", "fonts"),
+                               ("pyproject.toml", ".")]  # version.py reads it
 
 if sys.platform == "win32":
     _DEFAULT_TJ = r"C:\libjpeg-turbo64\bin\turbojpeg.dll"

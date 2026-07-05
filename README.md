@@ -37,7 +37,9 @@ one-dir zip and a Linux one-file binary (built on the oldest LTS runner for
 glibc compatibility, `.tar.gz` to keep the executable bit) — on manual
 dispatch or a `v*` tag, which also attaches them to the GitHub release.
 Each platform job runs the headless test suite first as a compatibility
-gate.
+gate. The version lives in `pyproject.toml` (shown in the Help dialog via
+`version.py`); a release tag `vX.Y.Z` must match it or the workflow fails —
+so bump `pyproject.toml` in the release commit before tagging.
 
 On first launch the packaged Linux binary registers itself with the
 desktop — a launcher entry plus the aperture icon under

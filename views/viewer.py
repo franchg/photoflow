@@ -111,7 +111,9 @@ class CurveTexture:
 
     def __init__(self):
         self._tex: QOpenGLTexture | None = None
-        self._curve_id: int | None = None
+        # the uploaded array itself, not its id(): holding the reference
+        # keeps it alive, so identity can't be recycled onto a new array
+        self._curve: np.ndarray | None = None
 
     def bind(self, curve: np.ndarray, unit: int) -> None:
         if self._tex is None:
@@ -125,12 +127,12 @@ class CurveTexture:
                                  QOpenGLTexture.Filter.Nearest)
             tex.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
             self._tex = tex
-            self._curve_id = None
-        if self._curve_id != id(curve):
+            self._curve = None
+        if self._curve is not curve:
             self._tex.setData(QOpenGLTexture.PixelFormat.RGB,
                               QOpenGLTexture.PixelType.Float32,
                               np.ascontiguousarray(curve).tobytes())
-            self._curve_id = id(curve)
+            self._curve = curve
         self._tex.bind(unit)
 
     def release(self, unit: int) -> None:
@@ -141,7 +143,7 @@ class CurveTexture:
         if self._tex is not None:
             self._tex.destroy()
             self._tex = None
-            self._curve_id = None
+            self._curve = None
 
 
 class LmapTexture:
@@ -151,7 +153,7 @@ class LmapTexture:
 
     def __init__(self):
         self._tex: QOpenGLTexture | None = None
-        self._map_id: int | None = None
+        self._map: np.ndarray | None = None  # by reference, like CurveTexture
 
     def bind(self, lmap: np.ndarray, unit: int) -> None:
         h, w = lmap.shape
@@ -173,13 +175,13 @@ class LmapTexture:
                                  QOpenGLTexture.Filter.Nearest)
             tex.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
             self._tex = tex
-            self._map_id = None
-        if self._map_id != id(lmap):
+            self._map = None
+        if self._map is not lmap:
             rgb = np.repeat(np.ascontiguousarray(lmap)[..., None], 3, axis=2)
             self._tex.setData(QOpenGLTexture.PixelFormat.RGB,
                               QOpenGLTexture.PixelType.Float32,
                               rgb.tobytes())
-            self._map_id = id(lmap)
+            self._map = lmap
         self._tex.bind(unit)
 
     def release(self, unit: int) -> None:
@@ -190,7 +192,7 @@ class LmapTexture:
         if self._tex is not None:
             self._tex.destroy()
             self._tex = None
-            self._map_id = None
+            self._map = None
 
 
 _NO_LMAP = np.zeros((1, 1), dtype=np.float32)  # placeholder while no image

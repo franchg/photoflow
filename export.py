@@ -25,7 +25,7 @@ from PySide6.QtGui import QImage
 
 import decode
 import render
-from editstack import EditStack, StackError
+from editstack import EditStack
 
 
 DEFAULT_PATTERN = "[FILE_NAME]"
@@ -62,12 +62,7 @@ class ExportItem:
 
 
 def _load_stack(stack_json: str | None) -> EditStack:
-    if not stack_json:
-        return EditStack()
-    try:
-        return EditStack.from_json(stack_json)
-    except StackError:
-        return EditStack()
+    return EditStack.from_json_lenient(stack_json)
 
 
 def render_name(pattern: str, item: ExportItem) -> str:
