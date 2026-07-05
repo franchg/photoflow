@@ -13,10 +13,9 @@ STACK_VERSION = 1
 
 # Snapseed-style tune params. "exposure" is shown as Brightness in the UI;
 # "ambiance" is Snapseed's Ambiance/Atmosphere: +1 opens shadows and boosts
-# color ("colorful and happy"), -1 goes contrasty and desaturated. "hue" has
-# no slider anymore but stays valid for existing stacks.
+# color ("colorful and happy"), -1 goes contrasty and desaturated.
 TUNE_KEYS = ("exposure", "contrast", "saturation", "ambiance",
-             "highlights", "shadows", "temperature", "tint", "hue")
+             "highlights", "shadows", "temperature", "tint")
 OP_TYPES = ("rotate", "crop", "tune", "vignette")
 
 # vignette params: center (cx, cy) normalized to the visible frame, radius
@@ -104,10 +103,9 @@ class FoldedTune:
     """All enabled tune ops folded to one set of render inputs: additive
     params sum, contrast / saturation fold as (1 + p) factors — so the
     preview shader is a single pass regardless of stack depth."""
-    exposure: float = 0.0          # sums, in [-1, 1] units (render maps to EV)
+    exposure: float = 0.0          # sums, in [-1, 1] units
     temperature: float = 0.0       # sums
     tint: float = 0.0              # sums
-    hue: float = 0.0               # sums
     ambiance: float = 0.0          # sums
     highlights: float = 0.0        # sums
     shadows: float = 0.0           # sums
@@ -116,7 +114,6 @@ class FoldedTune:
 
     def is_identity(self) -> bool:
         return (self.exposure == 0 and self.temperature == 0 and self.tint == 0
-                and self.hue == 0
                 and self.ambiance == 0 and self.highlights == 0
                 and self.shadows == 0
                 and self.contrast_factor == 1.0 and self.saturation_factor == 1.0)
@@ -271,7 +268,6 @@ class EditStack:
             f.exposure += p.get("exposure", 0.0)
             f.temperature += p.get("temperature", 0.0)
             f.tint += p.get("tint", 0.0)
-            f.hue += p.get("hue", 0.0)
             f.ambiance += p.get("ambiance", 0.0)
             f.highlights += p.get("highlights", 0.0)
             f.shadows += p.get("shadows", 0.0)

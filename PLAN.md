@@ -58,8 +58,10 @@ Edits never touch source files. Each image has an ordered edit stack
 ```
 
 - Tune keys: `exposure` (shown as Brightness), `contrast`, `saturation`,
-  `ambiance`, `highlights`, `shadows`, `temperature`, `tint`, `hue` (valid
-  in stacks, no slider). Scalars normalized to [-1, 1]; geometry in
+  `ambiance`, `highlights`, `shadows`, `temperature`, `tint`. (An early
+  `hue` key was dropped; stacks carrying it fail validation and the
+  loaders fall back to an empty stack.) Scalars normalized to [-1, 1];
+  geometry in
   normalized rects; rotation is any angle (slider −180…180 in 0.1° steps
   plus the 90° button). The fold decomposes total rotation into the
   nearest 90° multiple (exact `rot90`, lossless-able) + a fine residual
@@ -100,9 +102,14 @@ context. Order:
    uploaded as a small texture (bilinear-sampled with explicit
    texelFetch so CPU export matches exactly; the viewer computes it once
    per photo from its CPU-side copy).
-3. highlights/shadows: luma²-masked single-gain pulls (chroma-preserving)
+3. highlights/shadows: measured Snapseed responses — global, linear in
+   the slider, driven by (channel value, pixel luma):
+   `delta = |s|·[D(L) + b·(D(p)−D(L)) + (p−L)·h(p,L)]` with per-side
+   gray curves D (hl+ a gain from black that clips white; hl− a hinge
+   above 0.55; sh+ a hinge below 0.30 that lifts true black; sh− a gain
+   from white that clips black) — `render.HLSH_CHROMA` / `_hlsh_apply`.
 4. saturation: mix with Rec.709 luma
-5. hue: 3×3 rotation about the gray axis
+5. vignette: blend toward the brightness curve, radial-falloff weighted
 
 Brightness, contrast and warmth responses are least-squares fits
 calibrated against Snapseed's Tune Image slider→curve tables (measured

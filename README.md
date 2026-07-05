@@ -132,12 +132,15 @@ picked up automatically).
   brightness/contrast/warmth slider responses are calibrated to match
   Snapseed's Tune Image tone tables (within ~1–2/255 across the range):
   brightening never clips white, contrast rolls off softly, warming
-  shifts mid-tones while highlights keep their color. Ambiance is a true
-  local tone map calibrated by measuring Snapseed itself
-  (`tools/ambiance_calib.py`): the same pixel value opens up when its
-  neighborhood is dark and calms down when it is bright, plus a vibrance
-  that boosts muted colors far more than already-saturated ones. Highlights/shadows apply a luma-masked gain
-  so lifted shadows keep their color. The white-balance eyedropper (W, or
+  shifts mid-tones while highlights keep their color. Ambiance, highlights
+  and shadows are calibrated by measuring Snapseed itself
+  (`tools/ambiance_calib.py` chart round-trips): ambiance is a true local
+  tone map — the same pixel value opens up when its neighborhood is dark
+  and calms down when it is bright, plus a vibrance that boosts muted
+  colors far more than already-saturated ones; highlights/shadows are
+  piecewise responses driven by both the channel value and the pixel luma
+  (shadows +100 lifts true black, highlights −100 walks the white point
+  down, mid-tones stay put). The white-balance eyedropper (W, or
   the WB button) samples the clicked source pixel and solves
   temperature/tint against the warmth curves so that pixel renders exactly
   neutral — every stage after white balance maps neutral to neutral.

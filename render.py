@@ -13,9 +13,9 @@ Pipeline (PLAN.md "Render pipeline", Snapseed-calibrated tune set):
                  the blurred neighborhood luminance (local_mean_luma —
                  a small map the GPU samples as a texture); its chroma
                  component folds into the saturation stage
-  3. highlights/shadows: luma²-masked pull toward white/black
+  3. highlights/shadows: measured (channel, pixel-luma) surfaces
   4. saturation  mix with Rec.709 luma
-  5. hue         3×3 rotation matrix around the gray axis
+  5. vignette    blend toward the brightness curve, radial-falloff weighted
 
 The brightness/contrast/warmth responses are least-squares fits calibrated
 against Snapseed's Tune Image behavior (measured from its slider→tone-curve
@@ -36,9 +36,33 @@ import numpy as np
 from editstack import EditStack, FoldedTune, Geometry
 
 K_TINT = 0.30          # tint param ±1 → ±30% G gain swing (+1 = magenta)
-K_HUE_DEGREES = 180.0  # hue param ±1 → ±180°
-K_HIGHLIGHTS = 0.7     # strength of the highlights pull at ±1
-K_SHADOWS = 0.7        # strength of the shadows pull at ±1
+
+# Highlights/shadows, measured from Snapseed exports. Global (no
+# neighborhood term), linear in the slider, but driven by BOTH the channel
+# value p and the pixel luma L:
+#   delta_ch = |s|·[D(L) + b·(D(p) - D(L)) + (p - L)·h(p, L)]
+# D is the side's gray response (grays reduce to it exactly since p == L):
+#   hl+  D = 0.2571·x                  (gain from black, clips at white)
+#   hl-  D = -poly(t), t hinged above 0.55 (white point descends)
+#   sh+  D = poly(t),  t hinged below 0.30 (black point lifts)
+#   sh-  D = -0.2478·(1-x)             (gain from white, clips at black)
+# h(p,L) = h0 + h1·L + h2·L² + h3·L³ + h4·p + h5·p² + h6·p·L captures the
+# measured chroma behavior (fit ≤2/255 on grays, extremes on saturated
+# patches like every other Snapseed color term).
+HL_GAIN_POS = 0.2571
+HL_NEG = (0.55, (0.168555, 0.310803, -0.308744))
+SH_POS = (0.30, (0.252738, 0.028237, -0.132882))
+SH_GAIN_NEG = 0.2478
+HLSH_CHROMA = {
+    ("hl", 1): (0.0352, (0.137029, 0.260296, -1.32709, 0.644387,
+                         0.0192083, 0.0383106, -0.212314)),
+    ("hl", -1): (1.5921, (0.350513, -2.65793, 6.37245, -4.58377,
+                          -0.8328, 1.11377, 1.20787)),
+    ("sh", 1): (1.2671, (0.734066, -0.777532, 0.016477, 0.153334,
+                         -1.37066, 0.670391, 0.753031)),
+    ("sh", -1): (-0.0976, (-0.393829, 1.24253, 0.215181, -1.09558,
+                           -0.894893, 0.480137, 0.55739)),
+}
 # Ambiance chroma term is a vibrance: gain 1 + s·max(a + b·chroma, 0) —
 # muted colors move much more than already-saturated ones (measured slopes)
 K_AMB_VIB_POS = (0.7108, -0.7593)   # (a, b) for s > 0
@@ -234,6 +258,39 @@ def _tone_delta(name: str, s: float, x: np.ndarray) -> np.ndarray:
     return out
 
 
+def _hlsh_D(tool: str, sign: int, x: np.ndarray) -> np.ndarray:
+    """Gray (achromatic) response of one hl/sh side, per unit |s|."""
+    if tool == "hl":
+        if sign > 0:
+            return HL_GAIN_POS * x
+        a, c = HL_NEG
+        t = np.maximum(0.0, (x - a) / (1.0 - a))
+        return -(c[0] * t + c[1] * t ** 2 + c[2] * t ** 3)
+    if sign > 0:
+        a, c = SH_POS
+        t = np.maximum(0.0, (a - x) / a)
+        return c[0] * t + c[1] * t ** 2 + c[2] * t ** 3
+    return -SH_GAIN_NEG * (1.0 - x)
+
+
+def _hlsh_apply(srgb: np.ndarray, hl: float, sh: float) -> np.ndarray:
+    """Highlights then shadows — keep in sync with hlsh_apply in the
+    shader. srgb: float32 (..., 3) in [0, 1]."""
+    for tool, s in (("hl", hl), ("sh", sh)):
+        if s == 0.0:
+            continue
+        sign = 1 if s > 0 else -1
+        L = (srgb @ LUMA)[..., None]
+        DL = _hlsh_D(tool, sign, L)
+        Dp = _hlsh_D(tool, sign, srgb)
+        b, h = HLSH_CHROMA[(tool, sign)]
+        hval = (h[0] + h[1] * L + h[2] * L ** 2 + h[3] * L ** 3
+                + h[4] * srgb + h[5] * srgb ** 2 + h[6] * srgb * L)
+        delta = abs(s) * (DL + b * (Dp - DL) + (srgb - L) * hval)
+        srgb = np.clip(srgb + delta, 0.0, 1.0)
+    return srgb
+
+
 def build_tone_curve(brightness: float = 0.0, contrast: float = 0.0,
                      temperature: float = 0.0, tint: float = 0.0) -> np.ndarray:
     """Compose warmth ∘ tint ∘ brightness ∘ contrast into one per-channel
@@ -241,7 +298,9 @@ def build_tone_curve(brightness: float = 0.0, contrast: float = 0.0,
     Returns float32 (CURVE_N, 3). All params clamp to [-1, 1].
 
     Warmth must stay the first stage: the WB eyedropper solve relies on
-    every later stage applying one identical curve to all three channels."""
+    every later stage applying one identical curve to all three channels.
+    Highlights/shadows are NOT part of this curve — they depend on pixel
+    luma, not just the channel value (see _hlsh_apply)."""
     xs = np.linspace(0.0, 1.0, CURVE_N)
     b, c, t = _clamp1(brightness), _clamp1(contrast), _clamp1(temperature)
     tint_scale = math.exp(-_clamp1(tint) * K_TINT) ** (1.0 / GAMMA)
@@ -324,19 +383,6 @@ def solve_white_balance(rgb) -> tuple[float, float]:
     return t, _clamp1(n)
 
 
-def hue_matrix(hue: float) -> np.ndarray:
-    """Rotation around the achromatic (1,1,1) axis by hue*K_HUE_DEGREES."""
-    angle = math.radians(hue * K_HUE_DEGREES)
-    c, s = math.cos(angle), math.sin(angle)
-    k = (1.0 - c) / 3.0
-    r3 = math.sqrt(1.0 / 3.0) * s
-    return np.array([
-        [c + k, k - r3, k + r3],
-        [k + r3, c + k, k - r3],
-        [k - r3, k + r3, c + k],
-    ], dtype=np.float32)
-
-
 def _clamp1(v: float) -> float:
     return max(-1.0, min(1.0, v))
 
@@ -369,9 +415,8 @@ class TuneUniforms:
                                             folded.temperature, folded.tint))
         self.ambiance = amb
         self.saturation = max(0.0, float(folded.saturation_factor))
-        self.highlights = _clamp1(folded.highlights) * K_HIGHLIGHTS
-        self.shadows = _clamp1(folded.shadows) * K_SHADOWS
-        self.hue_mat = hue_matrix(folded.hue)
+        self.highlights = _clamp1(folded.highlights)
+        self.shadows = _clamp1(folded.shadows)
         if vignette is not None and vignette.get("strength", 0.0):
             self.vig_strength = _clamp1(float(vignette["strength"]))
             self.vig_center = (float(vignette["cx"]), float(vignette["cy"]))
@@ -403,20 +448,9 @@ def apply_tune(rgb_float: np.ndarray, u: TuneUniforms, lmap=None,
         pl = (srgb @ LUMA)[..., None]
         srgb = np.clip(pl + (srgb - pl) * gain, 0.0, 1.0)
     if u.highlights != 0.0 or u.shadows != 0.0:
-        # Luma-masked pull toward white/black, applied as one gain to all
-        # channels so color ratios survive a shadow lift (colorful, not washed)
-        L0 = srgb @ LUMA
-        wh = L0 * L0
-        ws = (1.0 - L0) ** 2
-        dL = ((max(u.highlights, 0.0) * (1.0 - L0)
-               + min(u.highlights, 0.0) * L0) * wh
-              + (max(u.shadows, 0.0) * (1.0 - L0)
-                 + min(u.shadows, 0.0) * L0) * ws)
-        gain = np.clip(L0 + dL, 0.0, 1.0) / np.maximum(L0, 1e-4)
-        srgb = np.clip(srgb * gain[..., None], 0.0, 1.0)
+        srgb = _hlsh_apply(srgb, u.highlights, u.shadows)
     luma = srgb @ LUMA
     out = luma[..., None] + (srgb - luma[..., None]) * u.saturation
-    out = out @ u.hue_mat.T
     np.clip(out, 0.0, 1.0, out=out)
     if u.vig_strength != 0.0:
         fh, fw = full_size if full_size is not None else out.shape[:2]

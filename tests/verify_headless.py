@@ -256,10 +256,10 @@ def main() -> None:
         EditStack([Op("tune", {"ambiance": 1.0})]).folded_tune())
     amb_neg = render.TuneUniforms(
         EditStack([Op("tune", {"ambiance": -1.0})]).folded_tune())
-    check("ambiance folds: own stage, curve/sat/shadows untouched",
+    check("ambiance folds: own stage, curve/sat untouched",
           amb_pos.saturation == 1.0 and amb_neg.saturation == 1.0
           and amb_pos.curve_is_identity and amb_pos.ambiance == 1.0
-          and amb_pos.shadows == 0 and amb_neg.ambiance == -1.0)
+          and amb_neg.ambiance == -1.0)
     # vibrance: muted colors gain chroma hard at +1, saturated ones barely;
     # negative ambiance mutes gently
     vib = np.full((512, 512, 3), 128, dtype=np.uint8)
@@ -306,19 +306,31 @@ def main() -> None:
           warm[-1, 2] > 0.9
           and warm[mid, 2] < 0.35 and warm[mid, 0] > 0.5)
 
+    # Snapseed-measured highlights/shadows: piecewise per-channel curves
+    # baked into the tone LUT — hl- only touches above ~0.55, sh+ only
+    # below ~0.30 (and lifts true black), hl+ is a gain that clips white
     gray = np.array([[[0.15] * 3, [0.85] * 3]], dtype=np.float32)
     hl = render.TuneUniforms(
         EditStack([Op("tune", {"highlights": -0.8})]).folded_tune())
     out_hl = render.apply_tune(gray.copy(), hl)
     check("highlights -: darkens brights, spares darks",
-          out_hl[0, 1, 0] < 0.70 and abs(out_hl[0, 0, 0] - 0.15) < 0.02,
+          0.70 < out_hl[0, 1, 0] < 0.75 and abs(out_hl[0, 0, 0] - 0.15) < 0.005,
           str(out_hl))
     sh = render.TuneUniforms(
         EditStack([Op("tune", {"shadows": 0.8})]).folded_tune())
     out_sh = render.apply_tune(gray.copy(), sh)
     check("shadows +: lifts darks, spares brights",
-          out_sh[0, 0, 0] > 0.30 and abs(out_sh[0, 1, 0] - 0.85) < 0.02,
+          0.22 < out_sh[0, 0, 0] < 0.27 and abs(out_sh[0, 1, 0] - 0.85) < 0.005,
           str(out_sh))
+    bw = np.array([[[0.0] * 3, [0.9] * 3]], dtype=np.float32)
+    out_shp = render.apply_tune(bw.copy(), render.TuneUniforms(
+        EditStack([Op("tune", {"shadows": 1.0})]).folded_tune()))
+    out_hlp = render.apply_tune(bw.copy(), render.TuneUniforms(
+        EditStack([Op("tune", {"highlights": 1.0})]).folded_tune()))
+    check("shadows +1 lifts pure black, highlights +1 clips white",
+          0.12 < out_shp[0, 0, 0] < 0.17 and out_hlp[0, 1, 0] == 1.0
+          and out_hlp[0, 0, 0] == 0.0,
+          f"{out_shp[0, 0, 0]} {out_hlp[0, 1, 0]}")
 
     # white-balance eyedropper: the solve neutralizes the picked pixel, and
     # every stage after wb maps neutral to neutral, so it stays gray through
@@ -331,11 +343,18 @@ def main() -> None:
     wb_u = render.TuneUniforms(
         EditStack([Op("tune", {"temperature": t, "tint": n, "exposure": 0.2,
                                "contrast": 0.3, "saturation": 0.4,
-                               "highlights": -0.2, "shadows": 0.3,
-                               "hue": 0.2})]).folded_tune())
+                               "highlights": -0.2,
+                               "shadows": 0.3})]).folded_tune())
     out_wb = render.apply_tune(warm.copy(), wb_u)
     check("wb solve renders picked pixel gray",
           float(out_wb.max() - out_wb.min()) < 1.5 / 255.0, str(out_wb))
+    # "hue" is gone: stacks carrying it fail validation (loaders fall back
+    # to an empty stack)
+    try:
+        validate_op(Op("tune", {"hue": 0.5}))
+        check("hue key rejected", False)
+    except StackError:
+        check("hue key rejected", True)
     ct, cn = render.solve_white_balance((0.9, 0.5, 0.2))
     check("wb solve clamps strong casts", ct == -1.0 and -1.0 <= cn <= 1.0,
           f"{ct} {cn}")

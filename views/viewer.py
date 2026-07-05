@@ -213,7 +213,6 @@ def set_tune_uniforms(prog: QOpenGLShaderProgram, tune,
     prog.setUniformValue1f("u_hl", float(tune.highlights))
     prog.setUniformValue1f("u_sh", float(tune.shadows))
     prog.setUniformValue1f("u_sat", float(tune.saturation))
-    prog.setUniformValue("u_hue", mat3_uniform(tune.hue_mat))
     prog.setUniformValue1i("u_vig_curve", 3)
     vig_tex.bind(tune.vig_curve, 3)
     prog.setUniformValue1f("u_vig", float(tune.vig_strength))

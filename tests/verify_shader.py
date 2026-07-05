@@ -112,7 +112,7 @@ def main():
 
     # --- tune parity ------------------------------------------------------
     stack = EditStack([Op("tune", {"exposure": 0.35, "contrast": 0.25,
-                                   "saturation": 0.4, "hue": 0.15,
+                                   "saturation": 0.4,
                                    "temperature": -0.3, "tint": 0.2,
                                    "ambiance": 0.4,
                                    "highlights": 0.5, "shadows": -0.4}),

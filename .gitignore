@@ -15,5 +15,7 @@ dist/
 
 # ambiance calibration round-trip data (Snapseed-derived; only the fitted
 # coefficients in render.py ship)
+tools/**/*.png
 tools/*.png
+tools/**/measurements.json
 tools/measurements.json

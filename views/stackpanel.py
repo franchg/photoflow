@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QListWidget,
 from editstack import VIGNETTE_DEFAULTS, EditStack, Op
 
 # Snapseed's Tune Image set, in its order. The stack key for Brightness stays
-# "exposure" (schema compat); "hue" remains valid in stacks but has no slider.
+# "exposure" (schema compat).
 PANEL_KEYS = ("exposure", "contrast", "saturation", "ambiance",
               "highlights", "shadows", "temperature", "tint")
 SLIDER_LABELS = {
