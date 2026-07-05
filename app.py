@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 import math
 import os
-import subprocess
 import sys
 import time
 from collections import OrderedDict
@@ -26,9 +25,12 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 import styles
 from catalog import Catalog
 from decode import SCAN_EXTENSIONS
+from desktopintegration import register_linux_desktop, set_default_viewer
+from theme import THEMES, apply_theme, capture_native_theme
 from editstack import EditClipboard, EditStack, StackError, StackHistory
 from render import solve_white_balance
-from export import ExportDialog, Exporter, ExportItem
+from export import Exporter, ExportItem
+from views.exportdialog import ExportDialog
 from models import (FLAG_NONE, FLAG_PICK, FLAG_REJECT, FileListModel,
                     FilterProxy, IdRole, SORT_DATE, SORT_NAME)
 from views.foldertree import FolderTree
@@ -382,23 +384,15 @@ class MainWindow(QMainWindow):
         return len(missing)
 
     def _make_default_viewer(self) -> None:
-        """Register the desktop entry (dev runs too) and make it the system
-        default handler for JPEG and PNG via xdg-mime."""
         try:
-            _register_linux_desktop(force=True)
-            result = subprocess.run(
-                ["xdg-mime", "default", "photoflow.desktop",
-                 "image/jpeg", "image/png"],
-                capture_output=True, text=True)
+            ok, err = set_default_viewer()
         except OSError as e:
-            QMessageBox.warning(self, "Default viewer", str(e))
-            return
-        if result.returncode == 0:
+            ok, err = False, str(e)
+        if ok:
             self.statusBar().showMessage(
                 "photoflow is now the default viewer for JPEG and PNG", 6000)
         else:
-            QMessageBox.warning(self, "Default viewer",
-                                result.stderr.strip() or "xdg-mime failed")
+            QMessageBox.warning(self, "Default viewer", err)
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(
@@ -965,85 +959,6 @@ class MainWindow(QMainWindow):
         super().closeEvent(ev)
 
 
-THEMES = ("system", "light", "dark")
-_native_style: str | None = None
-_native_palette: QPalette | None = None
-
-
-def capture_native_theme(app: QApplication) -> None:
-    """Remember the platform's style and palette before we touch anything,
-    so 'System' can always be restored at runtime."""
-    global _native_style, _native_palette
-    _native_style = app.style().objectName()
-    _native_palette = QPalette(app.palette())
-
-
-def apply_theme(app: QApplication, mode: str) -> None:
-    if mode in ("light", "dark"):
-        tokens = styles.DARK if mode == "dark" else styles.LIGHT
-        app.setStyle("Fusion")
-        app.setPalette(styles.make_palette(tokens))
-        app.setStyleSheet(styles.build_qss(tokens))
-    else:  # system: whatever the platform theme (GTK/KDE/…) provides
-        app.setStyleSheet("")
-        app.setStyle(_native_style or "Fusion")
-        app.setPalette(_native_palette or QPalette())
-
-
-def _register_linux_desktop(data_home: str | None = None, *,
-                            force: bool = False) -> None:
-    """Install the launcher entry + theme icons for the packaged Linux binary.
-
-    On Wayland the dock/taskbar icon comes from a .desktop file matched to
-    the window's app id — a window icon alone shows as a generic gear. Runs
-    on every frozen start so Exec= follows the binary if it moves. force=True
-    (the default-viewer button) registers dev runs too; data_home overrides
-    the destination (tests).
-    """
-    if sys.platform != "linux":
-        return
-    if data_home is None:
-        if not (force or getattr(sys, "frozen", False)):
-            return
-        data_home = os.environ.get("XDG_DATA_HOME",
-                                   os.path.expanduser("~/.local/share"))
-    apps_dir = os.path.join(data_home, "applications")
-    scalable = os.path.join(data_home, "icons", "hicolor", "scalable", "apps")
-    sized = os.path.join(data_home, "icons", "hicolor", "256x256", "apps")
-    for d in (apps_dir, scalable, sized):
-        os.makedirs(d, exist_ok=True)
-    with open(os.path.join(scalable, "photoflow.svg"), "w") as f:
-        f.write(styles.app_icon_svg())
-    png = os.path.join(sized, "photoflow.png")
-    if not os.path.exists(png):
-        styles.write_app_icon(png)
-    if getattr(sys, "frozen", False):
-        exec_cmd = f'"{os.path.realpath(sys.executable)}"'
-    else:  # dev run registered via the default-viewer button
-        exec_cmd = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
-    entry = "\n".join((
-        "[Desktop Entry]",
-        "Type=Application",
-        "Name=photoflow",
-        "Comment=Fast JPEG/PNG browser, culling and non-destructive editor",
-        f"Exec={exec_cmd} %F",
-        "Icon=photoflow",
-        "Terminal=false",
-        "Categories=Graphics;Photography;Viewer;",
-        "MimeType=image/jpeg;image/png;",
-        "StartupWMClass=photoflow",
-    )) + "\n"
-    path = os.path.join(apps_dir, "photoflow.desktop")
-    try:
-        with open(path) as f:
-            if f.read() == entry:
-                return
-    except OSError:
-        pass
-    with open(path, "w") as f:
-        f.write(entry)
-
-
 def main() -> int:
     QSurfaceFormat.setDefaultFormat(default_gl_format())
     app = QApplication(sys.argv)
@@ -1051,7 +966,7 @@ def main() -> int:
     app.setDesktopFileName("photoflow")  # Wayland app id ↔ photoflow.desktop
     app.setWindowIcon(styles.app_icon())
     try:
-        _register_linux_desktop()
+        register_linux_desktop()
     except OSError:
         pass  # desktop integration must never block startup
     capture_native_theme(app)

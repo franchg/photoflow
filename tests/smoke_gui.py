@@ -416,8 +416,10 @@ app.processEvents()
 ok("startup with vanished last_folder: silent, setting cleared")
 
 # Linux desktop integration: registration writes launcher entry + theme icons
+from desktopintegration import register_linux_desktop  # noqa: E402
+
 reg_dir = tempfile.mkdtemp(prefix="photoflow-smoke-desktop-")
-photoflow_app._register_linux_desktop(reg_dir)
+register_linux_desktop(reg_dir)
 _desktop_file = os.path.join(reg_dir, "applications", "photoflow.desktop")
 assert os.path.isfile(_desktop_file)
 assert os.path.isfile(os.path.join(
@@ -427,7 +429,7 @@ assert os.path.isfile(os.path.join(
 with open(_desktop_file) as f:
     _entry = f.read()
 assert "Icon=photoflow" in _entry and "Exec=" in _entry, _entry
-photoflow_app._register_linux_desktop(reg_dir)  # idempotent re-run
+register_linux_desktop(reg_dir)  # idempotent re-run
 ok("desktop registration: launcher entry + theme icons written")
 
 # CLI open: a folder path lands in the grid, an image path goes fullscreen
