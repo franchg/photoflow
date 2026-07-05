@@ -242,6 +242,24 @@ assert (not win.viewer._show_original
         and not win.viewer._effective_tune().identity)
 ok("right-click hold: original while pressed, edits restored on release")
 
+# rotation slider: free angle decomposes into 90° + fine; 0 clears the op
+win.panel._rot_slider.setValue(1033)          # +103.3°
+app.processEvents()
+geo_rot = win.panel.current_stack().geometry()
+assert geo_rot.cw_degrees == 90 and abs(geo_rot.fine - 13.3) < 1e-6, geo_rot
+assert abs(win.panel.current_stack().total_rotation() - 103.3) < 1e-6
+assert win.viewer._display_size()[0] < win.viewer._full_h  # auto-crop shrinks
+win.panel._rot_slider.setValue(900)           # exactly 90 → lossless-able
+app.processEvents()
+geo_rot = win.panel.current_stack().geometry()
+assert geo_rot.cw_degrees == 90 and geo_rot.fine == 0.0
+win.panel._rot_slider.setValue(0)
+app.processEvents()
+assert not any(op.op == "rotate" for op in win.panel.current_stack().ops)
+win._apply_external_stack(fid_cmp, EditStack())  # clean for later scenarios
+app.processEvents()
+ok("rotation slider: fine decompose, lossless snap at 90, zero clears")
+
 # fullscreen: F from the grid enters and exits (window shortcut), chrome hides
 from PySide6.QtTest import QTest  # noqa: E402
 

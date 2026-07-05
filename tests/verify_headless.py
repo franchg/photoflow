@@ -22,8 +22,8 @@ import pyexiv2
 import decode
 import render
 from catalog import Catalog
-from editstack import (EditClipboard, EditStack, Op, StackError, StackHistory,
-                       validate_op)
+from editstack import (EditClipboard, EditStack, Geometry, Op, StackError,
+                       StackHistory, validate_op)
 from export import ExportItem, ExportOptions, export_one, render_name
 
 
@@ -129,10 +129,42 @@ def main() -> None:
     rot_only = EditStack([Op("rotate", {"degrees": 270})])
     check("only_rotations true", rot_only.only_rotations())
     try:
-        validate_op(Op("rotate", {"degrees": 45}))
-        check("validate rejects 45deg", False)
+        validate_op(Op("rotate", {"degrees": 400}))
+        check("validate rejects 400deg", False)
     except StackError:
-        check("validate rejects 45deg", True)
+        check("validate rejects 400deg", True)
+
+    # free-angle rotation: fold decomposes into 90°-part + fine ∈ [-45, 45]
+    gf = EditStack([Op("rotate", {"degrees": 120.0})]).geometry()
+    check("rotation decomposes 120 = 90 + 30",
+          gf.cw_degrees == 90 and abs(gf.fine - 30.0) < 1e-9)
+    gf2 = EditStack([Op("rotate", {"degrees": -10.5})]).geometry()
+    check("negative fine rotation", gf2.cw_degrees == 0
+          and abs(gf2.fine + 10.5) < 1e-9 and not gf2.is_identity())
+    st_rot = EditStack()
+    st_rot.set_rotation(10.3)
+    check("set_rotation round-trip", abs(st_rot.total_rotation() - 10.3) < 1e-9)
+    st_rot.set_rotation(0.0)
+    check("set_rotation 0 clears the op", not st_rot.ops)
+    st_rot.add_rotation(90)
+    st_rot.set_rotation(-90.0)
+    check("set_rotation composes with 90s",
+          abs(st_rot.total_rotation() + 90) < 1e-9
+          and st_rot.geometry().fine == 0.0)
+
+    # fine-rotation resample: inscribed auto-crop dims + CW direction
+    k = render.inscribed_scale(640, 480, 10.0)
+    stripe = np.full((480, 640, 3), 255, dtype=np.uint8)
+    stripe[:, :320] = 0                      # black left half
+    out_f = render.apply_geometry(stripe, Geometry(0, (0, 0, 1, 1), 20.0))
+    oh_f, ow_f = out_f.shape[:2]
+    check("fine rotation dims = inscribed rect",
+          out_f.shape[:2] == (round(480 * render.inscribed_scale(640, 480, 20)),
+                              round(640 * render.inscribed_scale(640, 480, 20)))
+          and 0.80 < k < 0.85)
+    check("fine rotation turns clockwise",
+          out_f[5, ow_f // 2, 0] < 60 and out_f[-5, ow_f // 2, 0] > 200,
+          f"{out_f[5, ow_f//2, 0]} {out_f[-5, ow_f//2, 0]}")
     try:
         validate_op(Op("tune", {"exposure": 2.0}))
         check("validate rejects |p|>1", False)
@@ -187,16 +219,63 @@ def main() -> None:
           abs(two.ambiance - 0.5) < 1e-9 and abs(two.highlights - 0.2) < 1e-9
           and abs(two.shadows + 0.4) < 1e-9)
 
+    # Ambiance: local tone map, measured from Snapseed (tools/ambiance_calib).
+    # Same mid-gray square answers to its surround: lifts on black, drops on
+    # white at +1 (mirrored at -1); a flat field barely moves; chroma gain
+    # folds into saturation (boost ~3× stronger than the negative mute).
     amb_pos = render.TuneUniforms(
         EditStack([Op("tune", {"ambiance": 1.0})]).folded_tune())
-    check("ambiance +1 = colorful and happy",
-          amb_pos.saturation > 1.3 and amb_pos.contrast == 1.0
-          and amb_pos.shadows > 0.2)
     amb_neg = render.TuneUniforms(
         EditStack([Op("tune", {"ambiance": -1.0})]).folded_tune())
-    check("ambiance -1 = contrasty, less colorful",
-          amb_neg.saturation < 0.7 and amb_neg.contrast > 1.15
-          and amb_neg.shadows < 0)
+    check("ambiance folds: own stage, curve/sat/shadows untouched",
+          amb_pos.saturation == 1.0 and amb_neg.saturation == 1.0
+          and amb_pos.curve_is_identity and amb_pos.ambiance == 1.0
+          and amb_pos.shadows == 0 and amb_neg.ambiance == -1.0)
+    # vibrance: muted colors gain chroma hard at +1, saturated ones barely;
+    # negative ambiance mutes gently
+    vib = np.full((512, 512, 3), 128, dtype=np.uint8)
+    vib[248:264, 248:264] = (150, 128, 106)      # muted patch, chroma 44
+    vib[100:116, 100:116] = (255, 0, 0)          # saturated patch
+    vp = render.apply_tune_uint8(vib, amb_pos)
+    vn = render.apply_tune_uint8(vib, amb_neg)
+    def _chroma(px):
+        return int(px.max()) - int(px.min())
+    check("ambiance vibrance: muted boosted, saturated spared",
+          _chroma(vp[256, 256]) > 55 and abs(_chroma(vp[108, 108]) - 255) <= 8
+          and _chroma(vn[256, 256]) < 40,
+          f"{_chroma(vp[256, 256])} {_chroma(vp[108, 108])} "
+          f"{_chroma(vn[256, 256])}")
+    # geometry matters: the blur σ is ~3.6% of the image side, so on 512²
+    # a 16px probe is well inside its surround's influence
+    sq = np.zeros((512, 512, 3), dtype=np.uint8)
+    sq[248:264, 248:264] = 128                   # mid-gray probe on black
+    on_black = render.apply_tune_uint8(sq, amb_pos)[256, 256, 0]
+    flat_white = render.apply_tune_uint8(
+        np.full((512, 512, 3), 255, np.uint8), amb_pos)[256, 256, 0]
+    wsq = np.full((512, 512, 3), 255, dtype=np.uint8)
+    wsq[248:264, 248:264] = 128                  # same probe on white
+    on_white_sq = render.apply_tune_uint8(wsq, amb_pos)[256, 256, 0]
+    neg_black = render.apply_tune_uint8(sq, amb_neg)[256, 256, 0]
+    check("ambiance is local: probe follows its surround",
+          on_black > 165 and on_white_sq < 75 and neg_black < 95
+          and flat_white == 255,
+          f"{on_black} {on_white_sq} {neg_black} {flat_white}")
+
+    # Snapseed-calibrated tone responses: brightening pins black and white
+    # (never clips), darkening pulls the white point down, warming barely
+    # touches white but pulls blue at mid-gray
+    bmax = render.build_tone_curve(brightness=1.0)
+    check("brightness +1 pins endpoints, lifts mids",
+          abs(bmax[0, 0]) < 1e-3 and abs(bmax[-1, 0] - 1.0) < 1e-2
+          and bmax[render.CURVE_N // 2, 0] > 0.75)
+    bmin = render.build_tone_curve(brightness=-1.0)
+    check("brightness -1 pulls the white point down",
+          0.55 < bmin[-1, 0] < 0.75)
+    warm = render.build_tone_curve(temperature=1.0)
+    mid = render.CURVE_N // 2
+    check("warmth +1 protects white, shifts mids",
+          warm[-1, 2] > 0.9
+          and warm[mid, 2] < 0.35 and warm[mid, 0] > 0.5)
 
     gray = np.array([[[0.15] * 3, [0.85] * 3]], dtype=np.float32)
     hl = render.TuneUniforms(
@@ -287,6 +366,15 @@ def main() -> None:
     check("lossless rotate pixels", rot_diff < 2.0, f"mad={rot_diff}")
     # source top-left marker lands bottom-left after 270° CW
     check("lossless marker", rot_px[-5, 5, 0] > 200)
+
+    # 2b. fine rotation → must take the pixel path (inscribed-rect dims)
+    fine_stack = EditStack([Op("rotate", {"degrees": 10.0})])
+    out = export_one(ExportItem(1, plain, fine_stack.to_json()),
+                     ExportOptions(dest))
+    fw, fh = decode.read_header(open(out, "rb").read())
+    kf = render.inscribed_scale(640, 480, 10.0)
+    check("fine rotate export = resampled inscribed rect",
+          (fw, fh) == (round(640 * kf), round(480 * kf)), f"{fw}x{fh}")
 
     # 3. tune + crop → pixel path, matches render.render_stack
     tune_stack = EditStack([Op("crop", {"rect": [0.0, 0.0, 0.5, 0.5]}),

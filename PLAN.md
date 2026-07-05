@@ -60,7 +60,11 @@ Edits never touch source files. Each image has an ordered edit stack
 - Tune keys: `exposure` (shown as Brightness), `contrast`, `saturation`,
   `ambiance`, `highlights`, `shadows`, `temperature`, `tint`, `hue` (valid
   in stacks, no slider). Scalars normalized to [-1, 1]; geometry in
-  normalized rects / 90° multiples.
+  normalized rects; rotation is any angle (slider −180…180 in 0.1° steps
+  plus the 90° button). The fold decomposes total rotation into the
+  nearest 90° multiple (exact `rot90`, lossless-able) + a fine residual
+  in [-45°, 45°] that resamples bilinearly with an automatic crop to the
+  largest same-aspect inscribed rect (`render.inscribed_scale`).
 - Stacks compose in order. Consecutive `tune` ops fold algebraically
   (additive params sum; contrast/saturation fold as `(1+p)` factors) so the
   preview shader is a single pass regardless of stack depth. Geometry folds
@@ -69,11 +73,12 @@ Edits never touch source files. Each image has an ordered edit stack
   copy/paste — replace or append onto any selection, plus "apply last edit
   to selection". A paste on N images is N row writes + N queued thumb
   re-renders; the grid converges progressively.
-- The white-balance eyedropper is closed-form, not iterative: wb gains
-  apply in linear space and every later stage maps neutral to neutral, so
-  clicking a pixel solves `temperature`/`tint` exactly
-  (`render.solve_white_balance`), set on the edited op so the *folded*
-  stack lands on the solve.
+- The white-balance eyedropper solves `temperature`/`tint` so the clicked
+  pixel renders exactly neutral (`render.solve_white_balance`): warmth is
+  the *first* tune stage and every later stage maps neutral to neutral.
+  Temperature is found by bisecting the warmth curves until the pixel's R
+  and B meet; tint then scales G closed-form. Set on the edited op so the
+  *folded* stack lands on the solve.
 
 ## Render pipeline (preview ≡ export, by construction)
 
@@ -82,16 +87,45 @@ Edits never touch source files. Each image has an ordered edit stack
 `TuneUniforms`; `tests/verify_shader.py` proves GPU ≡ CPU on a real GL
 context. Order:
 
-1. exposure `rgb *= exp2(exposure · k)` (linear space)
-2. white balance: per-channel gains from temperature + tint (linear space)
-3. contrast: pivot 0.5, gamma-2.2 linearized
-4. highlights/shadows: luma²-masked single-gain pulls (chroma-preserving)
-5. saturation: mix with Rec.709 luma
-6. hue: 3×3 rotation about the gray axis
+1. tone curve: warmth (temperature) ∘ tint ∘ brightness ∘ contrast — all
+   per-channel display-space curves, composed on the CPU into one
+   `CURVE_N×3` table per slider change (`render.build_tone_curve`). The
+   GPU samples it as a 1024×1 RGB32F texture (explicit texelFetch+mix);
+   the CPU export mirrors the same gather+lerp. No per-pixel
+   transcendentals remain in the shader.
+2. ambiance: LOCAL tone map — a luma delta driven by (pixel luma, blurred
+   neighborhood luma) plus a vibrance term (chroma-weighted saturation).
+   The neighborhood comes from `render.local_mean_luma`: a ≤96px
+   box-reduced map blurred with a gaussian σ = 3.6% of the image side,
+   uploaded as a small texture (bilinear-sampled with explicit
+   texelFetch so CPU export matches exactly; the viewer computes it once
+   per photo from its CPU-side copy).
+3. highlights/shadows: luma²-masked single-gain pulls (chroma-preserving)
+4. saturation: mix with Rec.709 luma
+5. hue: 3×3 rotation about the gray axis
 
-Ambiance is not its own stage: it folds into saturation, shadows-lift, and
-(negative only) contrast — +1 reads "colorful and happy", −1 "contrasty and
-less colorful".
+Brightness, contrast and warmth responses are least-squares fits
+calibrated against Snapseed's Tune Image slider→curve tables (measured
+from `tune_image_ssm_*.png` / `tunehue_0to200_mitte100.png`; only our
+fitted polynomial coefficients ship — `render._TONE_MODEL`). End-to-end
+deviation ≤2/255 across the slider range (5/255 at contrast +100). The
+properties that make the sliders "usable": brightening pins black and
+white so +100 never clips; darkening pulls the white point down; contrast
+rolls off softly instead of hard-clamping; warming shifts mid-tones but
+barely touches white. Each response is `x + Σ ampₖ(|s|)·shapeₖ(x)` with
+one or two polynomial/sine (shape, amp) pairs per slider sign.
+
+Ambiance was calibrated by measurement, not from assets: Snapseed ships no
+curve table for it, so `tools/ambiance_calib.py` generates a chart (gray
+ramps, color patches, surround-probes, checkerboards) that was run through
+the real app at 7 slider values and measured back. Findings baked into the
+fit: the response is linear in the slider; the tone term depends on the
+*neighborhood* (a mid-gray square lifts on a dark surround and drops on a
+bright one — σ≈3.6% of the image side); flat black/white and pixel
+extremes are pinned; the chroma term is a vibrance (muted colors move ~10×
+more than saturated ones, and +s boosts ~3× harder than −s mutes). Fit
+quality: ~1/255 rms on the achromatic family, mean ≤6.5/255 full-chart at
+slider extremes. The calibration exports themselves stay out of the repo.
 
 **Color**: sRGB is the working space. ICC-tagged sources (JPEG APP2, PNG
 iCCP — Adobe RGB, Display P3) convert to sRGB at decode via Qt's

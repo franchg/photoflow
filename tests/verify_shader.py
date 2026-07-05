@@ -22,8 +22,9 @@ from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject,
 
 import render
 from editstack import EditStack, Op
-from views.viewer import (_ROT_INV, _VERT_SRC, default_gl_format, mat3_uniform,
-                          set_tune_uniforms)
+from views.viewer import (_VERT_SRC, CurveTexture, LmapTexture,
+                          default_gl_format, mat3_uniform, set_tune_uniforms,
+                          uv_matrix_for)
 from workers import np_to_qimage
 
 W, H = 256, 192
@@ -82,6 +83,10 @@ def main():
     prog.enableAttributeArray(0)
     prog.setAttributeBuffer(0, 0x1406, 0, 2)
 
+    curve_tex = CurveTexture()
+    lmap_tex = LmapTexture()
+    lmap = render.local_mean_luma(src)  # == what apply_tune_uint8 computes
+
     def gl_render(out_w, out_h, tune, uv3x3):
         fbo = QOpenGLFramebufferObject(QSize(out_w, out_h))
         fbo.bind()
@@ -94,7 +99,7 @@ def main():
         tex.bind(0)
         prog.setUniformValue("u_mvp", mvp)
         prog.setUniformValue("u_uv", mat3_uniform(uv3x3))
-        set_tune_uniforms(prog, tune)
+        set_tune_uniforms(prog, tune, curve_tex, lmap_tex, lmap)
         f.glDrawArrays(0x0005, 0, 4)  # GL_TRIANGLE_STRIP
         img = fbo.toImage().convertToFormat(QImage.Format.Format_RGB888)
         fbo.release()
@@ -123,15 +128,28 @@ def main():
     geo = geo_stack.geometry()
     cpu_g = render.apply_geometry(src, geo)
     oh, ow = cpu_g.shape[:2]
-    cx, cy, cw, ch = geo.rect
-    crop_m = np.array([[cw, 0, cx], [0, ch, cy], [0, 0, 1]], dtype=np.float64)
-    uv = _ROT_INV[geo.cw_degrees % 360] @ crop_m
+    uv = uv_matrix_for(geo, W, H)
     ident = render.TuneUniforms(EditStack().folded_tune())
     gpu_g = gl_render(ow, oh, ident, uv)
     mad = float(np.mean(np.abs(gpu_g.astype(int) - cpu_g.astype(int))))
     check("shader UV == numpy geometry", mad < 1.0, f"mad={mad:.3f}")
 
+    # --- fine-rotation parity (free-angle warp, bilinear both sides) --------
+    tex.setMinificationFilter(QOpenGLTexture.Filter.Linear)
+    tex.setMagnificationFilter(QOpenGLTexture.Filter.Linear)
+    fine_stack = EditStack([Op("rotate", {"degrees": 100.0})])  # 90 + 10 fine
+    geo_f = fine_stack.geometry()
+    cpu_f = render.apply_geometry(src, geo_f)
+    fh, fw = cpu_f.shape[:2]
+    gpu_f = gl_render(fw, fh, ident, uv_matrix_for(geo_f, W, H))
+    d = np.abs(gpu_f.astype(int) - cpu_f.astype(int))
+    mad = float(d.mean())
+    check("shader UV == numpy fine rotation", mad < 2.0,
+          f"mad={mad:.3f} max={int(d.max())}")
+
     tex.destroy()
+    curve_tex.destroy()
+    lmap_tex.destroy()
     vbo.destroy()
     vao.destroy()
     ctx.doneCurrent()

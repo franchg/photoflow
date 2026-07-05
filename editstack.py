@@ -44,7 +44,10 @@ class Op:
 
     def summary(self) -> str:
         if self.op == "rotate":
-            return f"Rotate {int(self.params['degrees']) % 360}°"
+            d = float(self.params["degrees"]) % 360
+            if d > 180:
+                d -= 360
+            return f"Rotate {d:g}°"
         if self.op == "crop":
             x, y, w, h = self.params["rect"]
             return f"Crop {w * 100:.0f}×{h * 100:.0f}%"
@@ -55,8 +58,8 @@ class Op:
 def validate_op(op: Op) -> None:
     if op.op == "rotate":
         deg = op.params.get("degrees")
-        if not isinstance(deg, (int, float)) or deg % 90 != 0:
-            raise StackError(f"rotate degrees must be a multiple of 90, got {deg!r}")
+        if not isinstance(deg, (int, float)) or not -360 <= deg <= 360:
+            raise StackError(f"rotate degrees must be in [-360, 360], got {deg!r}")
     elif op.op == "crop":
         rect = op.params.get("rect")
         if (not isinstance(rect, (list, tuple)) or len(rect) != 4
@@ -101,13 +104,18 @@ class FoldedTune:
 
 @dataclass
 class Geometry:
-    """Net geometric transform: rotate source by cw_degrees, then crop rect
-    (normalized [x, y, w, h]) in the rotated frame."""
+    """Net geometric transform: rotate source by cw_degrees (exact 90°
+    steps), then by `fine` degrees CW in [-45, 45] with an automatic crop
+    to the largest aspect-preserving inscribed rect (render.apply_geometry
+    and the viewer UV chain both implement it), then crop rect (normalized
+    [x, y, w, h]) in that visible frame."""
     cw_degrees: int = 0
     rect: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+    fine: float = 0.0
 
     def is_identity(self) -> bool:
-        return self.cw_degrees % 360 == 0 and self.rect == (0.0, 0.0, 1.0, 1.0)
+        return (self.cw_degrees % 360 == 0 and self.fine == 0.0
+                and self.rect == (0.0, 0.0, 1.0, 1.0))
 
 
 def _rotate_rect(rect, cw_degrees):
@@ -154,16 +162,40 @@ class EditStack:
         validate_op(op)
         self.ops.append(op)
 
-    def add_rotation(self, cw_degrees: int) -> None:
+    def add_rotation(self, cw_degrees: float) -> None:
         """Append a rotate, merging with a trailing rotate op."""
         if self.ops and self.ops[-1].op == "rotate" and self.ops[-1].enabled:
             total = (self.ops[-1].params["degrees"] + cw_degrees) % 360
-            if total == 0:
+            if abs(total) < 1e-9:
                 self.ops.pop()
             else:
                 self.ops[-1].params["degrees"] = total
         else:
             self.append(Op("rotate", {"degrees": cw_degrees % 360}))
+
+    def total_rotation(self) -> float:
+        """Folded rotation, normalized to (-180, 180] — the slider value."""
+        t = sum(float(op.params["degrees"]) for op in self.enabled_ops()
+                if op.op == "rotate") % 360
+        return t - 360 if t > 180 else t
+
+    def set_rotation(self, degrees: float) -> None:
+        """Set the *total* rotation (the slider path): the trailing rotate
+        op is adjusted so the fold lands on `degrees`; 0 removes it."""
+        tail = (self.ops[-1] if self.ops and self.ops[-1].op == "rotate"
+                and self.ops[-1].enabled else None)
+        others = self.total_rotation() - (float(tail.params["degrees"])
+                                          if tail else 0.0)
+        v = (degrees - others) % 360
+        if v > 180:
+            v -= 360
+        if abs(v) < 1e-9:
+            if tail is not None:
+                self.ops.pop()
+        elif tail is not None:
+            tail.params["degrees"] = v
+        else:
+            self.append(Op("rotate", {"degrees": v}))
 
     def last_tune(self) -> Op | None:
         for op in reversed(self.ops):
@@ -211,18 +243,29 @@ class EditStack:
         return f
 
     def geometry(self) -> Geometry:
-        rot = 0
+        """Fold to Geometry: total rotation decomposes into the nearest 90°
+        multiple (exact, lossless-able) + a fine residual in [-45, 45].
+        Crop rects transform through each rotate op's 90° part only — the
+        fine part re-frames under the crop, like other editors."""
+        total = 0.0
         rect = (0.0, 0.0, 1.0, 1.0)
         for op in self.enabled_ops():
             if op.op == "rotate":
-                d = int(op.params["degrees"])
-                rot = (rot + d) % 360
-                rect = _rotate_rect(rect, d)
+                d = float(op.params["degrees"])
+                total += d
+                rect = _rotate_rect(rect, round(d / 90.0) * 90)
             elif op.op == "crop":
                 cx, cy, cw, ch = op.params["rect"]
                 x, y, w, h = rect
                 rect = (x + cx * w, y + cy * h, cw * w, ch * h)
-        return Geometry(rot, rect)
+        theta = total % 360
+        if theta > 180:
+            theta -= 360
+        k90 = round(theta / 90.0) * 90
+        fine = theta - k90
+        if abs(fine) < 1e-9:
+            fine = 0.0
+        return Geometry(int(k90) % 360, rect, fine)
 
 
 # --------------------------------------------------------------------------

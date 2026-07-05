@@ -10,19 +10,21 @@ Coordinates: y-down ortho, quad positions in [0,1]²; uv==a_pos maps texel row 0
 """
 from __future__ import annotations
 
+import math
 import os
 
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (QColor, QMatrix3x3, QMatrix4x4, QPainter,
                            QPainterPath, QPalette, QPen, QSurfaceFormat,
-                           QVector3D)
+                           QVector2D)
 from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram,
                               QOpenGLTexture, QOpenGLVertexArrayObject)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 
+import decode
 from editstack import EditStack, Geometry
-from render import TuneUniforms
+from render import TuneUniforms, inscribed_scale, local_mean_luma
 
 _GL_FLOAT = 0x1406
 _GL_COLOR_BUFFER_BIT = 0x00004000
@@ -74,13 +76,137 @@ def mat3_uniform(m: np.ndarray) -> QMatrix3x3:
     return QMatrix3x3([float(v) for v in np.asarray(m).flatten()])
 
 
-def set_tune_uniforms(prog: QOpenGLShaderProgram, tune) -> None:
+def uv_matrix_for(geo: Geometry, full_w: int, full_h: int) -> np.ndarray:
+    """Visible-frame [0,1]² → source-texture UV: user crop, then the fine
+    rotation's inscribed-rect frame, then the 90° rotation. Mirrors
+    render.apply_geometry (which resamples the same mapping)."""
+    cx, cy, cw, ch = geo.rect
+    crop = np.array([[cw, 0, cx], [0, ch, cy], [0, 0, 1]], dtype=np.float64)
+    m = crop
+    if geo.fine != 0.0:
+        w2, h2 = (full_w, full_h)
+        if geo.cw_degrees % 180:
+            w2, h2 = h2, w2
+        k = inscribed_scale(w2, h2, geo.fine)
+        phi = math.radians(geo.fine)
+        c, s = math.cos(phi), math.sin(phi)
+        pre = np.array([[k * w2, 0, -0.5 * k * w2],
+                        [0, k * h2, -0.5 * k * h2],
+                        [0, 0, 1]])
+        rot = np.array([[c, s, 0], [-s, c, 0], [0, 0, 1]])  # rotate by -fine
+        post = np.array([[1.0 / w2, 0, 0.5],
+                         [0, 1.0 / h2, 0.5],
+                         [0, 0, 1]])
+        m = post @ rot @ pre @ m
+    return _ROT_INV[geo.cw_degrees % 360] @ m
+
+
+class CurveTexture:
+    """GL-side cache of TuneUniforms.curve: a CURVE_N×1 RGB32F texture.
+    Re-uploads only when a different curve array is bound (the identity
+    curve is a module-wide singleton, so browsing without edits never
+    re-uploads). Must be created/destroyed with a current GL context."""
+
+    def __init__(self):
+        self._tex: QOpenGLTexture | None = None
+        self._curve_id: int | None = None
+
+    def bind(self, curve: np.ndarray, unit: int) -> None:
+        if self._tex is None:
+            tex = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
+            tex.setFormat(QOpenGLTexture.TextureFormat.RGB32F)
+            tex.setSize(curve.shape[0], 1)
+            tex.setMipLevels(1)
+            tex.allocateStorage(QOpenGLTexture.PixelFormat.RGB,
+                                QOpenGLTexture.PixelType.Float32)
+            tex.setMinMagFilters(QOpenGLTexture.Filter.Nearest,
+                                 QOpenGLTexture.Filter.Nearest)
+            tex.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
+            self._tex = tex
+            self._curve_id = None
+        if self._curve_id != id(curve):
+            self._tex.setData(QOpenGLTexture.PixelFormat.RGB,
+                              QOpenGLTexture.PixelType.Float32,
+                              np.ascontiguousarray(curve).tobytes())
+            self._curve_id = id(curve)
+        self._tex.bind(unit)
+
+    def release(self, unit: int) -> None:
+        if self._tex is not None:
+            self._tex.release(unit)
+
+    def destroy(self) -> None:
+        if self._tex is not None:
+            self._tex.destroy()
+            self._tex = None
+            self._curve_id = None
+
+
+class LmapTexture:
+    """GL-side cache of the ambiance local-mean map (render.local_mean_luma):
+    a small R32F texture, re-uploaded when a different array is bound and
+    re-created when the map size changes (it tracks the photo's aspect)."""
+
+    def __init__(self):
+        self._tex: QOpenGLTexture | None = None
+        self._map_id: int | None = None
+
+    def bind(self, lmap: np.ndarray, unit: int) -> None:
+        h, w = lmap.shape
+        if self._tex is not None and (self._tex.width() != w
+                                      or self._tex.height() != h):
+            self._tex.destroy()
+            self._tex = None
+        if self._tex is None:
+            # RGB32F with the channel replicated: PySide6's setData silently
+            # drops single-channel Red/Float32 uploads (the RGB path is the
+            # one CurveTexture already proves out)
+            tex = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
+            tex.setFormat(QOpenGLTexture.TextureFormat.RGB32F)
+            tex.setSize(w, h)
+            tex.setMipLevels(1)
+            tex.allocateStorage(QOpenGLTexture.PixelFormat.RGB,
+                                QOpenGLTexture.PixelType.Float32)
+            tex.setMinMagFilters(QOpenGLTexture.Filter.Nearest,
+                                 QOpenGLTexture.Filter.Nearest)
+            tex.setWrapMode(QOpenGLTexture.WrapMode.ClampToEdge)
+            self._tex = tex
+            self._map_id = None
+        if self._map_id != id(lmap):
+            rgb = np.repeat(np.ascontiguousarray(lmap)[..., None], 3, axis=2)
+            self._tex.setData(QOpenGLTexture.PixelFormat.RGB,
+                              QOpenGLTexture.PixelType.Float32,
+                              rgb.tobytes())
+            self._map_id = id(lmap)
+        self._tex.bind(unit)
+
+    def release(self, unit: int) -> None:
+        if self._tex is not None:
+            self._tex.release(unit)
+
+    def destroy(self) -> None:
+        if self._tex is not None:
+            self._tex.destroy()
+            self._tex = None
+            self._map_id = None
+
+
+_NO_LMAP = np.zeros((1, 1), dtype=np.float32)  # placeholder while no image
+
+
+def set_tune_uniforms(prog: QOpenGLShaderProgram, tune,
+                      curve_tex: CurveTexture, lmap_tex: LmapTexture,
+                      lmap: np.ndarray) -> None:
     """Shared by the viewer and the shader parity test. Scalars go through
     setUniformValue1f/1i — PySide6's (str, float) overload is broken."""
     prog.setUniformValue1i("u_tex", 0)
-    prog.setUniformValue1f("u_exp_gain", float(tune.exp_gain))
-    prog.setUniformValue("u_wb", QVector3D(*[float(v) for v in tune.wb]))
-    prog.setUniformValue1f("u_contrast", float(tune.contrast))
+    prog.setUniformValue1i("u_curve", 1)
+    curve_tex.bind(tune.curve, 1)
+    prog.setUniformValue1i("u_lmap", 2)
+    lmap_tex.bind(lmap, 2)
+    prog.setUniformValue("u_lmap_size",
+                         QVector2D(lmap.shape[1], lmap.shape[0]))
+    prog.setUniformValue1f("u_amb", float(tune.ambiance))
     prog.setUniformValue1f("u_hl", float(tune.highlights))
     prog.setUniformValue1f("u_sh", float(tune.shadows))
     prog.setUniformValue1f("u_sat", float(tune.saturation))
@@ -113,6 +239,10 @@ class ViewerWidget(QOpenGLWidget):
         self._vao = QOpenGLVertexArrayObject()
         self._vbo = QOpenGLBuffer(QOpenGLBuffer.Type.VertexBuffer)
         self._texture: QOpenGLTexture | None = None
+        self._curve_tex = CurveTexture()
+        self._lmap_tex = LmapTexture()
+        self._lmap = _NO_LMAP            # ambiance local-mean map (per photo)
+        self._lmap_fid: int | None = None
         self._pending_image = None       # QImage waiting for upload in paintGL
         self._tex_level = -1             # workers.VIEWER_* level of the texture
 
@@ -162,6 +292,8 @@ class ViewerWidget(QOpenGLWidget):
             self.unsetCursor()
         self._show_original = False
         self._sample_image = None
+        self._lmap = _NO_LMAP
+        self._lmap_fid = None
         self._release_texture()
         self.set_stack(stack, _repaint=False)
         self._fit = True
@@ -175,6 +307,11 @@ class ViewerWidget(QOpenGLWidget):
         self._pending_image = image
         self._sample_image = image       # QImage is shared, this is a cheap ref
         self._tex_level = level
+        if fid != self._lmap_fid:
+            # ambiance local-mean map: content-dependent only, so the first
+            # (screen-res) arrival is enough — skip the full-res re-upload
+            self._lmap = local_mean_luma(decode.qimage_to_rgb(image))
+            self._lmap_fid = fid
         if not self._full_w:
             self._full_w, self._full_h = image.width(), image.height()
         self.update()
@@ -385,6 +522,8 @@ class ViewerWidget(QOpenGLWidget):
         if self._texture is not None:
             self._texture.destroy()
             self._texture = None
+        self._curve_tex.destroy()
+        self._lmap_tex.destroy()
         self._vbo.destroy()
         self._vao.destroy()
         self._program = None
@@ -407,16 +546,17 @@ class ViewerWidget(QOpenGLWidget):
         return self._identity_tune if self._show_original else self._tune
 
     def _uv_matrix(self) -> np.ndarray:
-        """Visible-frame [0,1]² → source-texture UV (rotation + crop)."""
-        cx, cy, cw, ch = self._geo.rect
-        crop = np.array([[cw, 0, cx], [0, ch, cy], [0, 0, 1]], dtype=np.float64)
-        return _ROT_INV[self._geo.cw_degrees % 360] @ crop
+        return uv_matrix_for(self._geo, self._full_w, self._full_h)
 
     def _display_size(self) -> tuple[float, float]:
-        """Displayed region size in full-res source pixels (rotate + crop)."""
+        """Displayed region size in full-res source pixels (rotate,
+        fine-rotation auto-crop, then crop)."""
         w, h = self._full_w, self._full_h
         if self._geo.cw_degrees % 180:
             w, h = h, w
+        if self._geo.fine != 0.0:
+            k = inscribed_scale(w, h, self._geo.fine)
+            w, h = w * k, h * k
         _, _, cw, ch = self._geo.rect
         return max(w * cw, 1.0), max(h * ch, 1.0)
 
@@ -483,8 +623,11 @@ class ViewerWidget(QOpenGLWidget):
         self._texture.bind(0)
         prog.setUniformValue("u_mvp", mvp)
         prog.setUniformValue("u_uv", mat3_uniform(uv))
-        set_tune_uniforms(prog, self._effective_tune())
+        set_tune_uniforms(prog, self._effective_tune(), self._curve_tex,
+                          self._lmap_tex, self._lmap)
         f.glDrawArrays(_GL_TRIANGLE_STRIP, 0, 4)
+        self._lmap_tex.release(2)
+        self._curve_tex.release(1)
         self._texture.release(0)
         self._vao.release()
         prog.release()

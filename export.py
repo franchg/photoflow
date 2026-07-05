@@ -167,9 +167,9 @@ def export_one(item: ExportItem, opts: ExportOptions) -> str:
         shutil.copyfile(item.path, out_path)
         return out_path
 
-    # Lossless path (JPEG only): net effect is a pure 90° rotation.
+    # Lossless path (JPEG only): net effect is a pure 90°-multiple rotation.
     if (bytes_are_srgb and not src_is_png and opts.resize_long is None
-            and stack.only_rotations()
+            and stack.only_rotations() and geo.fine == 0.0
             and orientation in decode.ORIENTATION_TO_CW_DEGREES):
         total = (decode.ORIENTATION_TO_CW_DEGREES[orientation]
                  + geo.cw_degrees) % 360

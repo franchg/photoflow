@@ -122,12 +122,23 @@ picked up automatically).
 - Edits are non-destructive stacks (JSON in SQLite); source JPEGs are never
   modified. Preview runs a single-pass GLSL shader; export runs the identical
   math in numpy (`render.py` owns both, `tests/verify_shader.py` proves parity).
+- Rotation: the 90° button plus a free-angle slider (−180…180, 0.1° steps).
+  Multiples of 90 stay exact (and export losslessly via jpegtran); any other
+  angle resamples and auto-crops to the largest same-aspect frame, exactly
+  like a straighten tool.
 - The tune op covers the Snapseed set: brightness, contrast, saturation,
-  ambiance (+1 opens shadows and boosts color, -1 goes contrasty and muted),
-  highlights, shadows, temperature, tint. Highlights/shadows apply a
-  luma-masked gain so lifted shadows keep their color. The white-balance
-  eyedropper (W, or the WB button) samples the clicked source pixel and
-  solves temperature/tint in linear space so that pixel renders exactly
+  ambiance, highlights, shadows, temperature, tint. The
+  brightness/contrast/warmth slider responses are calibrated to match
+  Snapseed's Tune Image tone tables (within ~1–2/255 across the range):
+  brightening never clips white, contrast rolls off softly, warming
+  shifts mid-tones while highlights keep their color. Ambiance is a true
+  local tone map calibrated by measuring Snapseed itself
+  (`tools/ambiance_calib.py`): the same pixel value opens up when its
+  neighborhood is dark and calms down when it is bright, plus a vibrance
+  that boosts muted colors far more than already-saturated ones. Highlights/shadows apply a luma-masked gain
+  so lifted shadows keep their color. The white-balance eyedropper (W, or
+  the WB button) samples the clicked source pixel and solves
+  temperature/tint against the warmth curves so that pixel renders exactly
   neutral — every stage after white balance maps neutral to neutral.
 - Color: sRGB is the working space. ICC-tagged sources (Adobe RGB cameras,
   Display P3 phones) convert to sRGB at decode — one spot in `decode.py`

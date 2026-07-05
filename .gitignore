@@ -12,3 +12,8 @@ __pycache__/
 # PyInstaller output
 build/
 dist/
+
+# ambiance calibration round-trip data (Snapseed-derived; only the fitted
+# coefficients in render.py ship)
+tools/*.png
+tools/measurements.json

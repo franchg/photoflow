@@ -73,6 +73,26 @@ class StackPanel(QWidget):
             ops_row.addWidget(b)
         root.addLayout(ops_row)
 
+        # rotation slider: total stack rotation in 0.1° steps; multiples of
+        # 90 keep the lossless-export path, anything else resamples
+        rot_row = QHBoxLayout()
+        rot_name = QLabel("Rotate")
+        rot_name.setMinimumWidth(78)
+        self._rot_slider = QSlider(Qt.Orientation.Horizontal)
+        self._rot_slider.setRange(-1800, 1800)
+        self._rot_slider.setValue(0)
+        self._rot_slider.setToolTip(
+            "Rotation in degrees — snaps math to lossless at 0/±90/±180")
+        self._rot_value = QLabel("0°")
+        self._rot_value.setMinimumWidth(44)
+        self._rot_value.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._rot_slider.valueChanged.connect(self._rotation_changed)
+        self._rot_slider.sliderReleased.connect(self._slider_released)
+        rot_row.addWidget(rot_name)
+        rot_row.addWidget(self._rot_slider, 1)
+        rot_row.addWidget(self._rot_value)
+        root.addLayout(rot_row)
+
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self._list.setMaximumHeight(160)
@@ -197,6 +217,11 @@ class StackPanel(QWidget):
             self._sliders[key].blockSignals(False)
             n = round(v * 100)
             self._value_labels[key].setText(f"{n:+d}" if n else "0")
+        deg = self._stack.total_rotation()
+        self._rot_slider.blockSignals(True)
+        self._rot_slider.setValue(round(deg * 10))
+        self._rot_slider.blockSignals(False)
+        self._rot_value.setText(f"{deg:+g}°" if deg else "0°")
 
     # -- edits ------------------------------------------------------------------
 
@@ -234,6 +259,15 @@ class StackPanel(QWidget):
     def _slider_released(self) -> None:
         self._emit(final=True)
 
+    def _rotation_changed(self, raw: int) -> None:
+        if self._loading:
+            return
+        deg = raw / 10.0
+        self._stack.set_rotation(deg)
+        self._rot_value.setText(f"{deg:+g}°" if deg else "0°")
+        self._rebuild_list()
+        self._emit(final=not self._rot_slider.isSliderDown())
+
     def _reset_tune(self) -> None:
         changed = False
         for op in self._stack.ops:
@@ -250,6 +284,7 @@ class StackPanel(QWidget):
     def _rotate_cw(self) -> None:
         self._stack.add_rotation(90)
         self._rebuild_list()
+        self._load_sliders()
         self._emit(final=True)
 
     def append_crop(self, rect: list[float]) -> None:
@@ -315,4 +350,5 @@ class StackPanel(QWidget):
         if 0 <= row < len(self._stack.ops):
             self._stack.ops[row].enabled = (
                 item.checkState() == Qt.CheckState.Checked)
+            self._load_sliders()
             self._emit(final=True)
