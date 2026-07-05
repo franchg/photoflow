@@ -1,8 +1,8 @@
 # photoflow
 
-Fast native Linux app for JPEG (and PNG) browsing, review/culling, and light
-non-destructive editing. See [PLAN.md](PLAN.md) for the full technical spec
-(written JPEG-first; PNG support was added later — see below).
+Fast native app (Linux + Windows) for JPEG/PNG browsing, review/culling,
+and light non-destructive editing. See [PLAN.md](PLAN.md) for the technical
+spec of the system as built.
 
 ## Run
 
