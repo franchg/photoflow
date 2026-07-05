@@ -22,7 +22,8 @@ THEME_MODES = ["system", "light", "dark"]
 
 class SettingsDialog(QDialog):
     def __init__(self, parent, *, theme: str, show_hidden: bool,
-                 catalog_path: str, on_empty_catalog, on_set_default=None):
+                 catalog_path: str, on_empty_catalog, on_clear_thumbs=None,
+                 on_remove_missing=None, on_set_default=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(460)
@@ -87,6 +88,25 @@ class SettingsDialog(QDialog):
                        muted.color(QPalette.ColorRole.PlaceholderText))
         note.setPalette(muted)
         clay.addWidget(note)
+
+        maint_row = QHBoxLayout()
+        clear_thumbs = QPushButton("Clear thumbnail cache")
+        clear_thumbs.setToolTip(
+            "Deletes every cached thumbnail and compacts the catalog file. "
+            "Edits, ratings and flags are kept; thumbnails regenerate as "
+            "folders are browsed.")
+        if on_clear_thumbs is not None:
+            clear_thumbs.clicked.connect(on_clear_thumbs)
+        missing_btn = QPushButton("Remove missing files…")
+        missing_btn.setToolTip(
+            "Scans the catalog and removes entries whose file was moved or "
+            "deleted — including their edits, ratings and flags")
+        if on_remove_missing is not None:
+            missing_btn.clicked.connect(on_remove_missing)
+        maint_row.addWidget(clear_thumbs)
+        maint_row.addWidget(missing_btn)
+        maint_row.addStretch(1)
+        clay.addLayout(maint_row)
 
         empty = QPushButton("Empty catalog…")
         empty.setStyleSheet("QPushButton { color: #d33c30; font-weight: bold; }")

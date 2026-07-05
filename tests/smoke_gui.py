@@ -448,6 +448,31 @@ app.processEvents()
 assert not win._fullscreen
 ok("open_path: folder → grid, image → fullscreen, bogus path ignored")
 
+# catalog maintenance: clearing the thumbnail cache keeps edits; the
+# missing-file sweep drops moved/deleted entries (progress path, no dialogs)
+fid_keep = win.model.entries()[0].id
+win._apply_external_stack(fid_keep, EditStack([Op("tune", {"exposure": 0.25})]))
+pump(lambda: (t := win.catalog.get_thumb_small(fid_keep)) is not None and t[1],
+     what="edited thumb cached")
+win._clear_thumb_cache(interactive=False)
+assert win.catalog.get_thumb_small(fid_keep) is None
+assert win.catalog.get_stack(fid_keep) is not None  # edits survive
+ok("clear thumbnail cache: thumbs gone, edits kept")
+
+victim2 = win.model.entries()[2]
+os.remove(victim2.path)  # vanish behind the app's back
+n_before2 = win.model.rowCount()
+removed = win._remove_missing_entries(interactive=False)
+assert removed == 1, removed
+pump(lambda: win.model.rowCount() == n_before2 - 1,
+     what="rescan after missing-file sweep")
+pump(lambda: win.catalog._read_conn().execute(
+    "SELECT COUNT(*) FROM files WHERE id=?", (victim2.id,)).fetchone()[0] == 0,
+    what="missing row removed")
+assert win.catalog.get_stack(fid_keep) is not None  # others untouched
+assert win._remove_missing_entries(interactive=False) == 0  # now all exist
+ok("remove missing files: sweep removed 1, edits of existing files kept")
+
 win.close()
 app.processEvents()
 print("\nSMOKE PASS")

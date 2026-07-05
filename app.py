@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from collections import OrderedDict
 
 from PySide6.QtCore import QFile, QSettings, QSize, Qt, QTimer
@@ -316,6 +317,70 @@ class MainWindow(QMainWindow):
     def _show_hidden_setting(self) -> bool:
         return self.settings.value("show_hidden", False, type=bool)
 
+    def _clear_thumb_cache(self, interactive: bool = True) -> None:
+        """Settings: drop every cached thumbnail (edits/ratings/flags stay)."""
+        before = os.path.getsize(self.catalog.db_path)
+        fut = self.catalog.clear_thumbs()
+        busy = QProgressDialog("Clearing thumbnail cache…", "", 0, 0, self)
+        busy.setWindowTitle("Thumbnail cache")
+        busy.setCancelButton(None)  # a queued VACUUM can't be interrupted
+        busy.setWindowModality(Qt.WindowModality.ApplicationModal)
+        busy.setMinimumDuration(0)
+        while not fut.done():
+            QApplication.processEvents()
+            time.sleep(0.02)
+        busy.close()
+        freed = max(0, before - os.path.getsize(self.catalog.db_path)) / 1e6
+        msg = (f"Thumbnail cache cleared — {freed:.1f} MB reclaimed. "
+               "Thumbnails regenerate as folders are browsed.")
+        if interactive:
+            QMessageBox.information(self, "Thumbnail cache", msg)
+        else:
+            self.statusBar().showMessage(msg, 6000)
+
+    def _remove_missing_entries(self, interactive: bool = True) -> int:
+        """Settings: purge catalog rows whose file no longer exists on disk
+        (moved or deleted) — their edits, ratings and flags go with them."""
+        rows = self.catalog.all_files()
+        progress = QProgressDialog(
+            f"Checking {len(rows)} cataloged files…", "Cancel",
+            0, len(rows), self)
+        progress.setWindowTitle("Remove missing files")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        missing: list[int] = []
+        for i, (fid, path) in enumerate(rows):
+            if i % 64 == 0:
+                progress.setValue(i)
+                QApplication.processEvents()
+                if progress.wasCanceled():
+                    progress.close()
+                    return 0  # nothing was removed
+            if not os.path.exists(path):
+                missing.append(fid)
+        progress.setValue(len(rows))
+        progress.close()
+        if not missing:
+            if interactive:
+                QMessageBox.information(
+                    self, "Remove missing files",
+                    f"All {len(rows)} cataloged files exist on disk.")
+            return 0
+        if interactive:
+            resp = QMessageBox.question(
+                self, "Remove missing files",
+                f"{len(missing)} of {len(rows)} cataloged files no longer "
+                "exist on disk.\nRemove their catalog entries? Any edits, "
+                "ratings and flags they had are deleted with them.")
+            if resp != QMessageBox.StandardButton.Yes:
+                return 0
+        self.catalog.remove_files(missing).result()
+        if self._current_folder:
+            self._scan(self._current_folder)
+        self.statusBar().showMessage(
+            f"Removed {len(missing)} missing files from the catalog", 6000)
+        return len(missing)
+
     def _make_default_viewer(self) -> None:
         """Register the desktop entry (dev runs too) and make it the system
         default handler for JPEG and PNG via xdg-mime."""
@@ -342,6 +407,8 @@ class MainWindow(QMainWindow):
             show_hidden=self._show_hidden_setting(),
             catalog_path=self.catalog.db_path,
             on_empty_catalog=self._empty_catalog,
+            on_clear_thumbs=self._clear_thumb_cache,
+            on_remove_missing=self._remove_missing_entries,
             on_set_default=(self._make_default_viewer
                             if sys.platform == "linux" else None))
         if dlg.exec() != SettingsDialog.DialogCode.Accepted:

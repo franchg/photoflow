@@ -224,6 +224,19 @@ class Catalog:
         return self._write(lambda c: c.executemany(
             "DELETE FROM thumbs WHERE file_id=?", [(f,) for f in fids]))
 
+    def clear_thumbs(self) -> Future:
+        """Drop every cached thumbnail; edits, ratings and flags stay.
+        VACUUM reclaims the space (thumbnails are the bulk of the file)."""
+        def op(conn: sqlite3.Connection):
+            conn.execute("DELETE FROM thumbs")
+            conn.commit()
+            conn.execute("VACUUM")
+        return self._write(op)
+
+    def all_files(self) -> list[tuple[int, str]]:
+        """(id, path) of every cataloged file — the missing-file sweep."""
+        return list(self._read_conn().execute("SELECT id, path FROM files"))
+
     def clear_all(self) -> Future:
         """Wipe the entire catalog: every edit stack, rating, flag and cached
         thumbnail. Source image files are never touched."""

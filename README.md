@@ -60,9 +60,13 @@ moving the binary is fine.
   for JPEG and PNG (`xdg-mime`; registers the launcher entry first, so it
   also works from a source checkout).
 - **Catalog** — relocate the SQLite catalog (a new/existing catalog is opened
-  at the chosen path; data is not moved), or **empty it** — this permanently
-  deletes all edit stacks, ratings, flags and thumbnail caches (never source
-  files) and sits behind a hard warning.
+  at the chosen path; data is not moved); **clear the thumbnail cache**
+  (compacts the file, edits/ratings/flags are kept); **remove missing
+  files** — scans every cataloged path with a progress bar and, after
+  confirmation, drops entries whose file was moved or deleted (their edits
+  go with them); or **empty it** — this permanently deletes all edit stacks,
+  ratings, flags and thumbnail caches (never source files) and sits behind
+  a hard warning.
 
 ## Keys
 
