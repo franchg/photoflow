@@ -46,6 +46,21 @@ that icon can only come from a `.desktop` entry) and photoflow appears in
 the app launcher. The entry's `Exec=` is refreshed on every start, so
 moving the binary is fine.
 
+## macOS
+
+Releases include `photoflow-macos-arm64.zip` — a `photoflow.app` bundle
+for Apple Silicon (all Macs since 2020), built and gate-tested by the same
+workflow. The build is **unsigned** (no Apple Developer ID), so the first
+launch needs right-click → Open, or:
+
+```sh
+xattr -dr com.apple.quarantine photoflow.app
+```
+
+Running from source works too: `brew install jpeg-turbo`, then the usual
+`uv sync` / `uv run python app.py` (the Apple Silicon Homebrew lib path is
+picked up automatically).
+
 ## Settings
 
 **Settings…** (Ctrl+,) covers:

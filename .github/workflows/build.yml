@@ -128,9 +128,66 @@ jobs:
           name: photoflow-linux-x64
           path: photoflow-linux-x64.tar.gz
 
+  macos:
+    # Apple Silicon (arm64) — covers all Macs since 2020. Unsigned build:
+    # first launch needs right-click → Open (or
+    # xattr -dr com.apple.quarantine photoflow.app).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install libjpeg-turbo (dylib + jpegtran)
+        run: brew install jpeg-turbo
+
+      - name: Install Python deps
+        run: uv sync
+
+      - name: Headless test suite (macOS compatibility gate)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run python tests/verify_headless.py
+
+      - name: Render app icon (.icns)
+        run: uv run python scripts/make_icns.py
+
+      - name: Build with PyInstaller (.app bundle)
+        run: |
+          export TURBOJPEG_DLL="$(brew --prefix jpeg-turbo)/lib/libturbojpeg.dylib"
+          export JPEGTRAN_EXE="$(brew --prefix jpeg-turbo)/bin/jpegtran"
+          uv run pyinstaller photoflow.spec --noconfirm
+
+      - name: Sanity-check bundle contents and launch
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          test -x dist/photoflow.app/Contents/MacOS/photoflow
+          test -e dist/photoflow.app/Contents/Frameworks/libturbojpeg.dylib
+          test -e dist/photoflow.app/Contents/Frameworks/shaders/adjust.frag
+          # macOS has no `timeout`: still alive after 10 s == it started
+          ./dist/photoflow.app/Contents/MacOS/photoflow & pid=$!
+          sleep 10
+          if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"; echo "launch OK"
+          else
+            wait "$pid" || true
+            echo "app exited early"; exit 1
+          fi
+
+      - name: Zip the app bundle (ditto keeps bundle metadata)
+        run: ditto -c -k --keepParent dist/photoflow.app photoflow-macos-arm64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: photoflow-macos-arm64
+          path: photoflow-macos-arm64.zip
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [windows, linux]
+    needs: [windows, linux, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -143,3 +200,4 @@ jobs:
           files: |
             photoflow-windows-x64.zip
             photoflow-linux-x64.tar.gz
+            photoflow-macos-arm64.zip

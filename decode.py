@@ -52,12 +52,18 @@ def _turbojpeg_lib_path() -> str | None:
     platform default locations (system lib on Linux, C:\\libjpeg-turbo64 on
     Windows)."""
     bundle = _bundle_dir()
-    if bundle is None:
-        return None
-    name = {"win32": "turbojpeg.dll", "darwin": "libturbojpeg.dylib"}.get(
-        sys.platform, "libturbojpeg.so.0")
-    path = os.path.join(bundle, name)
-    return path if os.path.exists(path) else None
+    if bundle is not None:
+        name = {"win32": "turbojpeg.dll", "darwin": "libturbojpeg.dylib"}.get(
+            sys.platform, "libturbojpeg.so.0")
+        path = os.path.join(bundle, name)
+        if os.path.exists(path):
+            return path
+    if sys.platform == "darwin":
+        # Apple Silicon Homebrew prefix, which PyTurboJPEG 1.x doesn't search
+        path = "/opt/homebrew/opt/jpeg-turbo/lib/libturbojpeg.dylib"
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def _tj() -> TurboJPEG:

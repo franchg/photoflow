@@ -24,8 +24,14 @@ pyexiv2_datas, pyexiv2_binaries, pyexiv2_hidden = collect_all("pyexiv2")
 binaries = list(pyexiv2_binaries)
 datas = list(pyexiv2_datas) + [("shaders/adjust.frag", "shaders")]
 
-_DEFAULT_TJ = r"C:\libjpeg-turbo64\bin\turbojpeg.dll" if sys.platform == "win32" else ""
-_DEFAULT_JT = r"C:\libjpeg-turbo64\bin\jpegtran.exe" if sys.platform == "win32" else ""
+if sys.platform == "win32":
+    _DEFAULT_TJ = r"C:\libjpeg-turbo64\bin\turbojpeg.dll"
+    _DEFAULT_JT = r"C:\libjpeg-turbo64\bin\jpegtran.exe"
+elif sys.platform == "darwin":  # Apple Silicon Homebrew prefix
+    _DEFAULT_TJ = "/opt/homebrew/opt/jpeg-turbo/lib/libturbojpeg.dylib"
+    _DEFAULT_JT = "/opt/homebrew/opt/jpeg-turbo/bin/jpegtran"
+else:
+    _DEFAULT_TJ = _DEFAULT_JT = ""
 for env, default in (("TURBOJPEG_DLL", _DEFAULT_TJ), ("JPEGTRAN_EXE", _DEFAULT_JT)):
     p = os.environ.get(env, default)
     if p and os.path.exists(p):
@@ -67,7 +73,9 @@ if sys.platform.startswith("linux"):
 
 pyz = PYZ(a.pure)
 
-icon = "build/photoflow.ico" if os.path.exists("build/photoflow.ico") else None
+_icon_file = ("build/photoflow.icns" if sys.platform == "darwin"
+              else "build/photoflow.ico")
+icon = _icon_file if os.path.exists(_icon_file) else None
 
 if os.environ.get("PHOTOFLOW_ONEFILE") == "1":
     exe = EXE(
@@ -89,3 +97,11 @@ else:
         icon=icon,
     )
     coll = COLLECT(exe, a.binaries, a.datas, name="photoflow")
+    if sys.platform == "darwin":
+        app = BUNDLE(
+            coll,
+            name="photoflow.app",
+            icon=icon,
+            bundle_identifier="io.github.franchg.photoflow",
+            info_plist={"NSHighResolutionCapable": True},
+        )

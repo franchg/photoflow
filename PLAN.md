@@ -168,12 +168,14 @@ copies ("EGL not available", no window on Wayland). The spec excludes them
 (`.so`-anchored so Qt plugins like `libdrm-egl-server.so` survive) and CI
 fails the build if any reappear.
 
-The `build` workflow (manual dispatch or `v*` tag): `windows` and `linux`
-jobs each run the headless suite as a platform gate, build, sanity-check
-bundle contents (including the exclusion guard), launch-test, and upload;
-a single `release` job attaches both archives to the GitHub release.
-Linux builds on the oldest LTS runner for glibc compatibility and ships
-`.tar.gz` (artifacts drop the executable bit).
+The `build` workflow (manual dispatch or `v*` tag): `windows`, `linux` and
+`macos` jobs each run the headless suite as a platform gate, build,
+sanity-check bundle contents (including the exclusion guard on Linux),
+launch-test, and upload; a single `release` job attaches all archives to
+the GitHub release. Linux builds on the oldest LTS runner for glibc
+compatibility and ships `.tar.gz` (artifacts drop the executable bit);
+macOS ships an unsigned arm64 `.app` (Gatekeeper: right-click → Open on
+first launch — notarization would need an Apple Developer ID).
 
 ## Project layout
 
