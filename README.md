@@ -1,175 +1,240 @@
-# photoflow
+<p align="center">
+  <img src="docs/logo.png" width="88" alt="photoflow logo">
+</p>
+<h1 align="center">photoflow</h1>
+<p align="center">
+  Fast photo browsing, culling and non-destructive editing for JPEG &amp; PNG.<br>
+  <b>Linux · Windows · macOS</b>
+</p>
 
-Fast native app (Linux + Windows) for JPEG/PNG browsing, review/culling,
-and light non-destructive editing. See [PLAN.md](PLAN.md) for the technical
-spec of the system as built.
+![Browsing and culling a folder of photos](docs/screenshot-browse.png)
 
-## Run
+photoflow is the step between a full memory card and the photos you keep.
+Point it at a folder and it shows thumbnails instantly; flip through images
+full-screen, rate and flag the keepers, fix them up with quick edits that
+never touch your original files, and export the results.
+
+## What it is — and isn't
+
+**Built for:** dumping a folder of JPEGs on it and getting through them
+fast. Browsing is tuned to feel instant even on large folders; edits
+preview on the GPU in real time; everything works from the keyboard.
+
+**Not built to be:** a photo manager or a Lightroom replacement. photoflow
+browses one folder at a time — there is no all-your-disk library, no
+albums, no face recognition, no cloud.
+
+**Current limitations, so you know before you start:**
+
+- **JPEG and PNG only.** No RAW, HEIC, WebP, TIFF, or video.
+- **Edits are global.** Crop, rotate, tune sliders and vignette apply to
+  the whole image — there are no local/selective adjustments, healing
+  brush, or manual curves.
+- **Ratings, flags and edits live in photoflow's own catalog**, not inside
+  your files. They survive restarts and folder moves *within* photoflow,
+  but they don't travel with files you copy elsewhere, and renaming or
+  moving files with other tools disconnects them (Settings offers a
+  cleanup for such orphans).
+- **Color:** photos tagged with a color profile (Adobe RGB cameras,
+  Display P3 phones) are handled correctly, and exports are always
+  standard sRGB. Wide-gamut *monitor* calibration is left to the OS.
+- The macOS build is **Apple Silicon only** and unsigned (one-time
+  security prompt — see below). On Windows, making photoflow the default
+  viewer is a manual "Open with" step. Opening a second image from the
+  file manager starts a second window.
+
+## Install
+
+### The easy way — download a release
+
+Grab the archive for your platform from the
+**[latest release](https://github.com/franchg/photoflow/releases/latest)**.
+Everything is bundled; there is nothing else to install.
+
+#### Linux (x86-64)
 
 ```sh
+tar -xzf photoflow-linux-x64.tar.gz
+./photoflow
+```
+
+A single self-contained binary. Works on any reasonably recent
+distribution (Ubuntu 22.04 or newer, and equivalents) with OpenGL 3.3+.
+The first launch registers photoflow in your app launcher and dock with
+its icon; you can move the binary wherever you like — the entry follows
+it. To make it your system default viewer for JPEG/PNG, use
+**Settings → File associations** inside the app.
+
+#### Windows (x86-64)
+
+1. Unzip `photoflow-windows-x64.zip`.
+2. Open the `photoflow` folder and run `photoflow.exe`.
+
+The build is unsigned, so SmartScreen may show "Windows protected your
+PC" on first run — click **More info → Run anyway** (one-time). To open
+images with photoflow by default: right-click an image → **Open with →
+Choose another app → photoflow → Always**.
+
+#### macOS (Apple Silicon — all Macs since 2020)
+
+1. Unzip `photoflow-macos-arm64.zip` and (optionally) drag
+   `photoflow.app` into Applications.
+2. The build is unsigned, so the first launch is blocked. Either run
+
+   ```sh
+   xattr -dr com.apple.quarantine photoflow.app
+   ```
+
+   or take the GUI route: double-click (it gets blocked), then
+   **System Settings → Privacy & Security** → scroll to "photoflow was
+   blocked" → **Open Anyway**. Either way it's one-time.
+
+### From source
+
+Needs [uv](https://docs.astral.sh/uv/) and libjpeg-turbo:
+
+```sh
+# Linux (Debian/Ubuntu)
+sudo apt install libturbojpeg libjpeg-turbo-progs
+# macOS
+brew install jpeg-turbo
+# Windows: install the official libjpeg-turbo -vc-x64.exe from
+# https://github.com/libjpeg-turbo/libjpeg-turbo/releases
+
+git clone https://github.com/franchg/photoflow.git
+cd photoflow
+uv sync
 uv run python app.py [folder | image]
 ```
 
-A folder argument opens it in the grid; an image argument opens its folder
-and shows that image fullscreen — which is what double-clicking an image in
-the file manager does once photoflow is the default viewer (see Settings).
+A folder argument opens it in the grid; an image argument opens its
+folder with that image fullscreen — which is exactly what double-clicking
+an image in your file manager does once photoflow is the default viewer.
 
-System requirements: `libturbojpeg` (`apt install libturbojpeg`), OpenGL 3.3+,
-and optionally `jpegtran` (`libjpeg-turbo-progs`) for lossless rotation export.
-Python dependencies are managed by uv (`uv sync`).
+## User guide
 
-## Windows
+### Browse
 
-The code is portable: on Windows, install
-[libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo/releases)
-(the official `-vc-x64.exe` installer; PyTurboJPEG finds the DLL in its
-default `C:\libjpeg-turbo64` location) and run the same `uv sync` /
-`uv run python app.py`. Trash goes to the Recycle Bin, settings to the
-registry, and the catalog/cache to `%LOCALAPPDATA%\photoflow`.
+Open a folder with **Ctrl+O**, the toolbar button, or the collapsible
+**Folders** tree. Thumbnails appear immediately and sharpen as full
+decodes arrive; everything is cached, so the second visit to a folder is
+instant. The toolbar has **S/M/L** thumbnail sizes and sorting by name or
+capture date; the status bar counts items, selection and hidden photos.
+**Ctrl+R** re-scans the folder and rebuilds its thumbnails.
 
-Packaged builds (no Python required) come from PyInstaller.
-`photoflow.spec` produces a windowed one-dir bundle with the native pieces
-inside (`turbojpeg`, `jpegtran`, the exiv2 runtime, the GLSL shader; the exe
-icon is rendered from the in-code SVG by `scripts/make_ico.py`); with
-`PHOTOFLOW_ONEFILE=1` it produces a single self-extracting binary instead.
-The `build` GitHub Actions workflow makes both release archives — a Windows
-one-dir zip and a Linux one-file binary (built on the oldest LTS runner for
-glibc compatibility, `.tar.gz` to keep the executable bit) — on manual
-dispatch or a `v*` tag, which also attaches them to the GitHub release.
-Each platform job runs the headless test suite first as a compatibility
-gate. The version lives in `pyproject.toml` (shown in the Help dialog via
-`version.py`); a release tag `vX.Y.Z` must match it or the workflow fails —
-so bump `pyproject.toml` in the release commit before tagging.
+### Cull
 
-On first launch the packaged Linux binary registers itself with the
-desktop — a launcher entry plus the aperture icon under
-`~/.local/share` — so the dock/taskbar shows the real logo (on Wayland
-that icon can only come from a `.desktop` entry) and photoflow appears in
-the app launcher. The entry's `Exec=` is refreshed on every start, so
-moving the binary is fine.
+Work the keyboard: **0–5** rates the selected photo (press again to
+clear), **P** picks, **X** rejects, **U** unflags. Ratings show as stars
+on the thumbnail; picks get a green edge, rejects a red one. The toolbar
+filters narrow the grid to a minimum rating, a flag state, or edited
+photos only — so "show me the 4-star picks" is two clicks. **Del** moves
+photos to the system trash (with a confirmation for multi-selections;
+originals are never deleted any other way).
 
-## macOS
+### View
 
-Releases include `photoflow-macos-arm64.zip` — a `photoflow.app` bundle
-for Apple Silicon (all Macs since 2020), built and gate-tested by the same
-workflow. The build is **unsigned** (no Apple Developer ID), and macOS 15
-Sequoia removed the old right-click → Open bypass, so the first launch
-needs one of:
+**Enter** or double-click opens the viewer; **← →** or **Space** moves
+through the folder, with the filmstrip below for jumping around. **Z** or
+double-click toggles fit ↔ 100%, the wheel zooms, dragging pans. **F**
+goes fullscreen. Hold the **right mouse button** anywhere to peek at the
+original with your edits bypassed — release to come back.
 
-```sh
-xattr -dr com.apple.quarantine photoflow.app
-```
+### Edit
 
-or the GUI route: double-click (it gets blocked), then System Settings →
-Privacy & Security → scroll down to "photoflow was blocked" → **Open
-Anyway**. Either is one-time.
+![Editing a photo: tune sliders, edit stack, filmstrip](docs/screenshot-edit.png)
 
-Running from source works too: `brew install jpeg-turbo`, then the usual
-`uv sync` / `uv run python app.py` (the Apple Silicon Homebrew lib path is
-picked up automatically).
+All edits are **non-destructive**: they form a per-photo edit stack
+stored in the catalog, your files are never modified, and every edit can
+be undone (**Ctrl+Z / Ctrl+Shift+Z**), toggled, or removed in the panel's
+stack list at any time — including after a restart.
 
-## Settings
+- **Tune sliders** — Brightness, Contrast, Saturation, Ambiance,
+  Highlights, Shadows, Temperature, Tint. Their responses are calibrated
+  against Snapseed's, so they stay usable across the whole range:
+  brightening doesn't blow out whites, ambiance opens up shadows like a
+  local tone map, highlights/shadows recover without washing things out.
+- **White balance** — press **W** (or the WB button) and click something
+  that should be neutral gray; temperature and tint are solved so that
+  spot renders exactly neutral. Esc cancels.
+- **Crop** — press **C**, drag the box or its handles, **Enter** applies.
+  Aspect presets in the panel: Free, Original, 1:1, 3:2, 4:3, 16:9
+  (orientation-aware — 3:2 becomes 2:3 on a portrait shot).
+- **Rotate** — the 90° button for orientation, plus a free-angle slider
+  (−180…180°, 0.1° steps) that works like a straighten tool: the photo is
+  auto-cropped to the largest clean frame.
+- **Vignette** — press **V** (or the Vig button), click where the
+  vignette should center, then set strength (darken or brighten the
+  edges) and size with the sliders.
 
-**Settings…** (Ctrl+,) covers:
+![Cropping with the rule-of-thirds overlay](docs/screenshot-crop.png)
 
-- **Theme** — *System* (follows your platform GTK/Qt theme, font included —
-  the default), *Light*, or *Dark*. Light/Dark are token-driven modern
-  themes (`styles.py`: one palette + QSS source of truth) using the bundled
-  IBM Plex Sans Condensed UI font (`fonts/`, SIL OFL) at a compact 10 pt.
-  Icons are feather-style SVGs embedded in code and tinted to the active
-  theme at runtime. **UI scale** (90–150 %) scales the whole interface on
-  top of the system DPI scaling; it applies on restart (the dialog offers
-  one).
-- **Browsing** — show hidden files and folders (folder tree + folder scans).
-- **File associations** (Linux) — make photoflow the system default viewer
-  for JPEG and PNG (`xdg-mime`; registers the launcher entry first, so it
-  also works from a source checkout).
-- **Catalog** — relocate the SQLite catalog (a new/existing catalog is opened
-  at the chosen path; data is not moved); **clear the thumbnail cache**
-  (compacts the file, edits/ratings/flags are kept); **remove missing
-  files** — scans every cataloged path with a progress bar and, after
-  confirmation, drops entries whose file was moved or deleted (their edits
-  go with them); or **empty it** — this permanently deletes all edit stacks,
-  ratings, flags and thumbnail caches (never source files) and sits behind
-  a hard warning.
+Edits move between photos: **Ctrl+Shift+C** copies the current stack,
+**Ctrl+Shift+V** pastes it onto the whole selection (**Ctrl+Alt+Shift+V**
+appends instead of replacing), and **Ctrl+L** applies just the last edit
+to the selection — rate a batch, fix one photo, paste onto the rest.
 
-## Keys
+### Export
+
+**Ctrl+E** exports the selection: choose a destination, a file-name
+pattern (tokens for the original name, capture date/time and a counter,
+with a live preview), JPEG quality, and an optional long-edge resize.
+PNGs stay PNG (lossless); JPEGs re-encode only when needed — an unedited
+photo exports as an exact copy, and pure 90° rotations are applied
+losslessly when possible. EXIF metadata is preserved.
+
+### Settings
+
+**Ctrl+,** opens Settings: **theme** (System / Light / Dark) and UI
+scale; hidden-file visibility; **file associations** (Linux: one click to
+become the default JPEG/PNG viewer); and catalog maintenance — relocate
+the catalog, clear the thumbnail cache, remove entries for
+missing/renamed files, or wipe the catalog entirely (edits and ratings
+live there; sources are never touched).
+
+## Keyboard shortcuts
+
+Press **F1** or **?** in the app for this list.
 
 | Key | Action |
 | --- | --- |
-| Ctrl+O | Open folder (or use the collapsible folder tree — “Folders” in the toolbar) |
-| Toolbar S/M/L | Thumbnail size button group for the grid (persisted) |
-| Ctrl+R / F5 | Force re-scan of the folder + full thumbnail regeneration |
-| Ctrl+, | Settings (theme, hidden files, catalog location / empty catalog) |
-| Del | Move selected image(s) to the system trash (asks only for multi-selections) |
-| Enter / double-click | Open viewer; Esc back to grid |
-| ← → / Space (viewer) | Previous / next image |
-| F / F11 | Fullscreen view in/out (from the grid: opens current photo fullscreen) |
+| **Browse** | |
+| Ctrl+O | Open folder |
+| Ctrl+R / F5 | Re-scan folder, rebuild its thumbnails |
+| Enter / double-click | Open the viewer; Esc goes back |
+| Space / → / ↓ | Next image |
+| ← / ↑ | Previous image |
+| F / F11 | Fullscreen in/out (from the grid: current photo) |
+| Del | Move selection to the system trash |
+| **Cull** | |
 | 0–5 | Rating (press again to clear) |
 | P / X / U | Pick / reject / unflag |
-| Z / double-click (viewer) | Fit ↔ 100 %; wheel zooms, drag pans |
-| C | Interactive crop: drag box/handles, Enter applies, Esc cancels. Aspect presets in the panel (Free/Orig/1:1/3:2/4:3/16:9, orientation-aware) |
-| W | White-balance eyedropper: click a spot that should be neutral gray (Esc cancels) |
-| V | Vignette: click to place the center; strength (± = darken/brighten edges) and size sliders in the panel |
-| Right-click (hold) | Compare with the original: edits bypassed while held (crop stays) |
+| **Viewer** | |
+| Z / double-click | Fit ↔ 100 % (wheel zooms, drag pans) |
+| C | Interactive crop — Enter applies, Esc cancels |
+| W | White-balance eyedropper — click a neutral gray |
+| V | Vignette — click to place the center |
+| Right-click (hold) | Compare with the original |
+| **Edit stacks** | |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / redo edits (per image) |
 | Ctrl+Shift+C | Copy edit stack |
 | Ctrl+Shift+V | Paste edits onto selection (replace) |
 | Ctrl+Alt+Shift+V | Paste edits onto selection (append) |
 | Ctrl+L | Apply last edit op to selection |
-| Ctrl+Z / Ctrl+Shift+Z | Undo / redo edits (per image) |
+| **App** | |
 | Ctrl+E | Export… |
-| F1 / ? | Keyboard-shortcut help (also the Help toolbar button) |
+| Ctrl+, | Settings… |
+| F1 / ? | Keyboard-shortcut help |
 
-## Architecture notes
+## For the curious
 
-- Edits are non-destructive stacks (JSON in SQLite); source JPEGs are never
-  modified. Preview runs a single-pass GLSL shader; export runs the identical
-  math in numpy (`render.py` owns both, `tests/verify_shader.py` proves parity).
-- Rotation: the 90° button plus a free-angle slider (−180…180, 0.1° steps).
-  Multiples of 90 stay exact (and export losslessly via jpegtran); any other
-  angle resamples and auto-crops to the largest same-aspect frame, exactly
-  like a straighten tool.
-- The tune op covers the Snapseed set: brightness, contrast, saturation,
-  ambiance, highlights, shadows, temperature, tint. The
-  brightness/contrast/warmth slider responses are calibrated to match
-  Snapseed's Tune Image tone tables (within ~1–2/255 across the range):
-  brightening never clips white, contrast rolls off softly, warming
-  shifts mid-tones while highlights keep their color. Ambiance, highlights
-  and shadows are calibrated by measuring Snapseed itself
-  (`tools/ambiance_calib.py` chart round-trips): ambiance is a true local
-  tone map — the same pixel value opens up when its neighborhood is dark
-  and calms down when it is bright, plus a vibrance that boosts muted
-  colors far more than already-saturated ones; highlights/shadows are
-  piecewise responses driven by both the channel value and the pixel luma
-  (shadows +100 lifts true black, highlights −100 walks the white point
-  down, mid-tones stay put). The white-balance eyedropper (W, or
-  the WB button) samples the clicked source pixel and solves
-  temperature/tint against the warmth curves so that pixel renders exactly
-  neutral — every stage after white balance maps neutral to neutral.
-- Color: sRGB is the working space. ICC-tagged sources (Adobe RGB cameras,
-  Display P3 phones) convert to sRGB at decode — one spot in `decode.py`
-  covers thumbs, viewer and export alike. Exports are **always sRGB** for
-  maximum compatibility: tagged explicitly (sRGB ICC + EXIF ColorSpace),
-  source profiles never copied, and tagged sources skip the byte-copy /
-  lossless-rotate shortcuts so pixels actually get converted. Thumbnails
-  cached before this feature refresh after Ctrl+R or Settings → Clear
-  thumbnail cache.
-- Thumbnails: EXIF-embedded thumbs paint first, then 1/8-scale libjpeg-turbo
-  decodes replace them; everything is cached in SQLite keyed by
-  `(path, mtime, size)`. The catalog lives in `~/.local/share/photoflow/`.
-- PNG: decoded via Qt's codec (`decode.py` dispatches on magic bytes; the rest
-  of the app is format-blind). No scaled decode or embedded-thumb stage —
-  PNGs full-decode then downscale. Alpha is flattened over white in the
-  pipeline; a no-edit export is a byte copy and keeps alpha. Exports stay in
-  the source format (PNG in → PNG out, lossless; the quality slider is
-  JPEG-only), and the jpegtran lossless-rotate path is JPEG-only.
-- All I/O and decoding runs on worker thread pools; the UI thread never
-  touches a file or a pixel.
+The technical story lives in **[PLAN.md](PLAN.md)**.
 
-## Tests
+Development in one line: `uv sync`, then
+`uv run python tests/verify_headless.py` / `verify_shader.py` /
+`smoke_gui.py` are the three suites that gate every release.
 
-```sh
-uv run python tests/verify_headless.py   # decode/EXIF/catalog/render/export
-uv run python tests/verify_shader.py     # GPU shader ≡ CPU export math
-uv run python tests/smoke_gui.py         # offscreen end-to-end app drive
-```
+## License
+
+[MIT](LICENSE). The bundled UI font (IBM Plex Sans Condensed) is licensed
+under the [SIL Open Font License 1.1](fonts/OFL.txt).

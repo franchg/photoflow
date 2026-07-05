@@ -2,9 +2,12 @@
 
 Fast native app for JPEG/PNG browsing, review/culling, and light
 non-destructive editing. Bridge-like browsing speed + Snapseed-style
-composable edit stacks with bulk copy/paste. Runs on Linux and Windows from
-source or as packaged binaries (see Packaging). JPEG is the optimized hot
-path; PNG rides the same pipeline through a Qt-codec decode fallback.
+composable edit stacks with bulk copy/paste. Runs on Linux, Windows and
+macOS from source or as packaged binaries (see Packaging). JPEG is the
+optimized hot path; PNG rides the same pipeline through a Qt-codec decode
+fallback (no scaled decode: full decode, then downscale; alpha is
+flattened over white through the edit pipeline, and only the no-edit
+byte-copy export keeps it).
 
 This document describes the system as built. User-facing docs (keys,
 settings, running) live in README.md.
@@ -134,10 +137,11 @@ amp 1.174) — so edges get tone-mapped darkening/lift that never crushes to
 black. GPU: a second curve texture + the frame-position varying; CPU: the
 same math in apply_tune.
 
-Ambiance was calibrated by measurement, not from assets: Snapseed ships no
-curve table for it, so `tools/ambiance_calib.py` generates a chart (gray
-ramps, color patches, surround-probes, checkerboards) that was run through
-the real app at 7 slider values and measured back. Findings baked into the
+Ambiance, highlights and shadows were calibrated by measurement, not from
+assets: Snapseed ships no curve tables for them, so `tools/ambiance_calib.py`
+generates a chart (gray ramps, color patches, surround-probes,
+checkerboards) that was run through the real app at several slider values
+per tool and measured back (`measure` subcommand). Findings baked into the
 fit: the response is linear in the slider; the tone term depends on the
 *neighborhood* (a mid-gray square lifts on a dark surround and drops on a
 bright one — σ≈3.6% of the image side); flat black/white and pixel
@@ -201,6 +205,7 @@ removal), catalog relocation, full wipe behind a hard warning.
   desktop entry matched to the window's app id; `Exec=` follows the binary
   if it moves). Settings can make photoflow the xdg default viewer for
   JPEG/PNG. Deletion goes to the system trash via `QFile.moveToTrash`.
+  Catalog and thumbnail cache live in `~/.local/share/photoflow/`.
 - **CLI / file manager**: `photoflow [folder|image]` — a folder opens in
   the grid, an image opens its parent folder fullscreen on that image
   (the `Exec=%F` double-click path).
