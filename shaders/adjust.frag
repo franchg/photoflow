@@ -8,6 +8,7 @@
 // export path (render.sample_curve) computes identical values.
 
 in vec2 v_uv;
+in vec2 v_frame;            // position in the visible frame [0,1]²
 out vec4 fragColor;
 
 uniform sampler2D u_tex;
@@ -20,6 +21,12 @@ uniform float u_hl;         // highlights pull, pre-scaled by K_HIGHLIGHTS
 uniform float u_sh;         // shadows pull, pre-scaled by K_SHADOWS
 uniform float u_sat;        // saturation mix factor
 uniform mat3  u_hue;        // rotation around the gray axis
+uniform float u_vig;        // vignette strength (0 = off; sign is baked
+                            // into u_vig_curve, this only gates the stage)
+uniform sampler2D u_vig_curve;  // brightness curve at the vignette strength
+uniform vec2 u_vig_center;  // in visible-frame coords
+uniform float u_vig_radius; // fraction of the half frame diagonal
+uniform vec2 u_vig_frame;   // visible frame size in pixels (aspect)
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 const int CURVE_N = 1024;
@@ -31,21 +38,21 @@ const float AMB[24] = float[24](
     -19.50465, 134.2402, 374.7766, -2583.244, 3844.742, -1674.701,
     52.76057, -563.3507, 1453.711, -898.8191, -807.9057, 739.3197);
 
-vec3 tone_curve(vec3 v) {
+vec3 curve_sample(sampler2D curve, vec3 v) {
     vec3 f = clamp(v, 0.0, 1.0) * float(CURVE_N - 1);
     ivec3 i0 = min(ivec3(f), ivec3(CURVE_N - 2));
     vec3 fr = f - vec3(i0);
-    vec3 a = vec3(texelFetch(u_curve, ivec2(i0.r, 0), 0).r,
-                  texelFetch(u_curve, ivec2(i0.g, 0), 0).g,
-                  texelFetch(u_curve, ivec2(i0.b, 0), 0).b);
-    vec3 b = vec3(texelFetch(u_curve, ivec2(i0.r + 1, 0), 0).r,
-                  texelFetch(u_curve, ivec2(i0.g + 1, 0), 0).g,
-                  texelFetch(u_curve, ivec2(i0.b + 1, 0), 0).b);
+    vec3 a = vec3(texelFetch(curve, ivec2(i0.r, 0), 0).r,
+                  texelFetch(curve, ivec2(i0.g, 0), 0).g,
+                  texelFetch(curve, ivec2(i0.b, 0), 0).b);
+    vec3 b = vec3(texelFetch(curve, ivec2(i0.r + 1, 0), 0).r,
+                  texelFetch(curve, ivec2(i0.g + 1, 0), 0).g,
+                  texelFetch(curve, ivec2(i0.b + 1, 0), 0).b);
     return mix(a, b, fr);
 }
 
 void main() {
-    vec3 srgb = tone_curve(texture(u_tex, v_uv).rgb);
+    vec3 srgb = curve_sample(u_curve, texture(u_tex, v_uv).rgb);
     if (u_amb != 0.0) {
         // Ambiance: local tone map. Luma delta from (pixel luma, blurred
         // neighborhood luma), same for all channels — chroma-preserving;
@@ -94,5 +101,17 @@ void main() {
     }
     float luma = dot(srgb, LUMA);
     vec3 sat = mix(vec3(luma), srgb, u_sat);
-    fragColor = vec4(clamp(u_hue * sat, 0.0, 1.0), 1.0);
+    vec3 outc = clamp(u_hue * sat, 0.0, 1.0);
+    if (u_vig != 0.0) {
+        // Vignette: blend toward the brightness curve at the vignette
+        // strength, weighted by the fitted radial falloff. Mirrors the
+        // vignette block in render.apply_tune / render.vignette_weight.
+        vec2 dpx = (v_frame - u_vig_center) * u_vig_frame;
+        float half_diag = 0.5 * length(u_vig_frame);
+        float d = length(dpx) / (u_vig_radius * half_diag);
+        float t = clamp((d - 0.10) / (1.24 - 0.10), 0.0, 1.0);
+        float m = min(1.174 * t * t * (3.0 - 2.0 * t), 1.0);
+        outc = mix(outc, curve_sample(u_vig_curve, outc), m);
+    }
+    fragColor = vec4(outc, 1.0);
 }

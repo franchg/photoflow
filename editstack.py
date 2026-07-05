@@ -17,7 +17,11 @@ STACK_VERSION = 1
 # no slider anymore but stays valid for existing stacks.
 TUNE_KEYS = ("exposure", "contrast", "saturation", "ambiance",
              "highlights", "shadows", "temperature", "tint", "hue")
-OP_TYPES = ("rotate", "crop", "tune")
+OP_TYPES = ("rotate", "crop", "tune", "vignette")
+
+# vignette params: center (cx, cy) normalized to the visible frame, radius
+# as a fraction of the half-diagonal, strength in [-1, 1] (- darkens edges)
+VIGNETTE_DEFAULTS = {"cx": 0.5, "cy": 0.5, "radius": 1.0, "strength": 0.0}
 
 
 class StackError(ValueError):
@@ -51,6 +55,9 @@ class Op:
         if self.op == "crop":
             x, y, w, h = self.params["rect"]
             return f"Crop {w * 100:.0f}×{h * 100:.0f}%"
+        if self.op == "vignette":
+            s = self.params.get("strength", 0.0)
+            return f"Vignette {round(s * 100):+d}"
         parts = [f"{k[:3]} {round(v * 100):+d}" for k, v in self.params.items() if v]
         return "Tune " + (", ".join(parts) if parts else "(neutral)")
 
@@ -75,6 +82,19 @@ def validate_op(op: Op) -> None:
                 raise StackError(f"unknown tune param {k!r}")
             if not isinstance(v, (int, float)) or not -1 <= v <= 1:
                 raise StackError(f"tune param {k}={v!r} outside [-1, 1]")
+    elif op.op == "vignette":
+        for k, v in op.params.items():
+            if k not in VIGNETTE_DEFAULTS:
+                raise StackError(f"unknown vignette param {k!r}")
+            if not isinstance(v, (int, float)):
+                raise StackError(f"vignette param {k}={v!r} not a number")
+        cx = op.params.get("cx", 0.5)
+        cy = op.params.get("cy", 0.5)
+        radius = op.params.get("radius", 1.0)
+        strength = op.params.get("strength", 0.0)
+        if not (0 <= cx <= 1 and 0 <= cy <= 1 and 0.1 <= radius <= 2
+                and -1 <= strength <= 1):
+            raise StackError(f"vignette params out of range: {op.params!r}")
     else:
         raise StackError(f"unknown op {op.op!r}")
 
@@ -208,7 +228,8 @@ class EditStack:
 
     def has_edits(self) -> bool:
         return not self.is_empty() and not (
-            self.folded_tune().is_identity() and self.geometry().is_identity())
+            self.folded_tune().is_identity() and self.geometry().is_identity()
+            and self.vignette() is None)
 
     def enabled_ops(self) -> list[Op]:
         return [op for op in self.ops if op.enabled]
@@ -221,7 +242,23 @@ class EditStack:
                 return False
             if op.op == "tune" and any(op.params.get(k) for k in TUNE_KEYS):
                 return False
+            if op.op == "vignette" and op.params.get("strength", 0.0):
+                return False
         return True
+
+    def vignette(self) -> dict | None:
+        """Effective vignette: the last enabled op with a nonzero strength,
+        defaults filled in — or None."""
+        for op in reversed(self.enabled_ops()):
+            if op.op == "vignette" and op.params.get("strength", 0.0):
+                return {**VIGNETTE_DEFAULTS, **op.params}
+        return None
+
+    def last_vignette(self) -> Op | None:
+        for op in reversed(self.ops):
+            if op.op == "vignette" and op.enabled:
+                return op
+        return None
 
     # -- folding ------------------------------------------------------------
 

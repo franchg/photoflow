@@ -161,7 +161,12 @@ class MainWindow(QMainWindow):
 
         self.panel.stack_edited.connect(self._on_stack_edited)
         self.panel.crop_requested.connect(self._start_crop)
+        self.panel.crop_aspect_selected.connect(self._crop_aspect_selected)
         self.panel.wb_pick_requested.connect(self._start_wb_pick)
+        self.panel.vig_pick_requested.connect(self._start_vig_pick)
+        self.viewer.vig_center_picked.connect(self._commit_vig_pick)
+        self.viewer.vig_pick_canceled.connect(
+            lambda: self.statusBar().clearMessage())
         self.panel.copy_requested.connect(self._copy_edits)
         self.panel.paste_replace_requested.connect(lambda: self._paste_edits(False))
         self.panel.paste_append_requested.connect(lambda: self._paste_edits(True))
@@ -307,6 +312,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self._apply_last_edit)
         QShortcut(QKeySequence("C"), self, activated=self._start_crop)
         QShortcut(QKeySequence("W"), self, activated=self._start_wb_pick)
+        QShortcut(QKeySequence("V"), self, activated=self._start_vig_pick)
         QShortcut(QKeySequence("F"), self, activated=self._toggle_fullscreen)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self,
                   activated=self._toggle_fullscreen)
@@ -757,7 +763,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ culling
 
     def _delete_selected(self) -> None:
-        if self.viewer.in_crop_mode or self.viewer.in_wb_pick_mode:
+        if (self.viewer.in_crop_mode or self.viewer.in_wb_pick_mode
+                or self.viewer.in_vig_pick_mode):
             return
         entries = self._selected_entries()
         if not entries:
@@ -819,9 +826,17 @@ class MainWindow(QMainWindow):
             return
         if self.stacked.currentIndex() != PAGE_VIEWER:
             self._open_viewer()
+        self.viewer.set_crop_aspect(self.panel.crop_aspect())
         self.viewer.begin_crop()
         self.statusBar().showMessage(
             "Crop: drag the handles or the box — Enter applies, Esc cancels")
+
+    def _crop_aspect_selected(self, aspect) -> None:
+        """Aspect preset clicked: start crop mode if needed, then lock."""
+        if not self.viewer.in_crop_mode:
+            self._start_crop()
+        else:
+            self.viewer.set_crop_aspect(aspect)
 
     def _commit_crop(self, rect: list) -> None:
         self.statusBar().clearMessage()
@@ -833,7 +848,8 @@ class MainWindow(QMainWindow):
 
     def _start_wb_pick(self) -> None:
         if (self._current_entry() is None or self.viewer.in_crop_mode
-                or self.viewer.in_wb_pick_mode):
+                or self.viewer.in_wb_pick_mode
+                or self.viewer.in_vig_pick_mode):
             return
         if self.stacked.currentIndex() != PAGE_VIEWER:
             self._open_viewer()
@@ -847,6 +863,23 @@ class MainWindow(QMainWindow):
         fid = self.viewer.current_fid
         if fid is not None and fid == self.panel.current_fid:
             self.panel.apply_wb(*solve_white_balance((r, g, b)))
+
+    def _start_vig_pick(self) -> None:
+        if (self._current_entry() is None or self.viewer.in_crop_mode
+                or self.viewer.in_wb_pick_mode
+                or self.viewer.in_vig_pick_mode):
+            return
+        if self.stacked.currentIndex() != PAGE_VIEWER:
+            self._open_viewer()
+        self.viewer.begin_vig_pick()
+        self.statusBar().showMessage(
+            "Vignette: click where the light should stay — Esc cancels")
+
+    def _commit_vig_pick(self, cx: float, cy: float) -> None:
+        self.statusBar().clearMessage()
+        fid = self.viewer.current_fid
+        if fid is not None and fid == self.panel.current_fid:
+            self.panel.set_vignette_center(cx, cy)
 
     # ------------------------------------------------------------------- editing
 

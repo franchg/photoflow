@@ -15,13 +15,15 @@ from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 DARK = {
-    "bg": "#1b1b1f", "base": "#202024", "surface": "#26262b",
-    "surface_alt": "#2f2f36", "pressed": "#232329",
-    "border": "#3a3a42", "border_strong": "#4a4a54",
-    "text": "#e8e8ec", "text_muted": "#9a9aa4",
-    "accent": "#5b8def", "accent_soft": "rgba(91, 141, 239, 0.28)",
-    "slider_track": "#3a3a42", "handle": "#e8e8ec", "handle_hover": "#ffffff",
-    "scroll": "#4a4a54", "scroll_hover": "#5f5f6b",
+    # deliberately low-contrast: dim (not white) text, gently lifted
+    # backgrounds with a narrow spread between surfaces, quiet borders
+    "bg": "#212125", "base": "#242429", "surface": "#2a2a2f",
+    "surface_alt": "#313137", "pressed": "#27272c",
+    "border": "#37373e", "border_strong": "#42424b",
+    "text": "#cfcfd6", "text_muted": "#8f8f99",
+    "accent": "#5b84d6", "accent_soft": "rgba(91, 132, 214, 0.22)",
+    "slider_track": "#37373e", "handle": "#bcbcc5", "handle_hover": "#dcdce2",
+    "scroll": "#44444d", "scroll_hover": "#55555f",
 }
 
 LIGHT = {

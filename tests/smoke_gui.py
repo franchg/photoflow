@@ -197,6 +197,45 @@ win.viewer.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
 assert not win.viewer.in_crop_mode
 ok("interactive crop: Esc cancels")
 
+# crop aspect presets: clicking a preset starts the crop locked to it;
+# the box holds the ratio (in pixels) through a corner drag
+win.panel._aspect_buttons["16:9"][0].click()
+app.processEvents()
+assert win.viewer.in_crop_mode
+
+
+def _crop_px_ratio():
+    dw, dh = win.viewer._display_size()
+    _, _, cw, ch = win.viewer._crop_rect
+    return (cw * dw) / (ch * dh)
+
+
+dw0, dh0 = win.viewer._display_size()
+target = 16 / 9 if dw0 >= dh0 else 9 / 16   # presets follow orientation
+assert abs(_crop_px_ratio() - target) < 0.02, _crop_px_ratio()
+r = win.viewer._crop_rect_logical()
+start = QPointF(r.right(), r.bottom())
+end = QPointF(r.right() - 70, r.bottom() - 20)
+win.viewer.mousePressEvent(_mev(QEvent.Type.MouseButtonPress, start,
+                                Qt.MouseButton.LeftButton))
+win.viewer.mouseMoveEvent(_mev(QEvent.Type.MouseMove, end,
+                               Qt.MouseButton.LeftButton))
+win.viewer.mouseReleaseEvent(_mev(QEvent.Type.MouseButtonRelease, end,
+                                  Qt.MouseButton.NoButton))
+assert abs(_crop_px_ratio() - target) < 0.02, _crop_px_ratio()
+assert win.viewer._crop_rect[2] < 0.999  # the drag did shrink the box
+win.panel._aspect_buttons["1:1"][0].click()  # re-snap while active
+app.processEvents()
+assert abs(_crop_px_ratio() - 1.0) < 0.02, _crop_px_ratio()
+win.viewer.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                   Qt.KeyboardModifier.NoModifier))
+win.panel._aspect_buttons["Free"][0].click()  # restore default for later
+app.processEvents()
+win.viewer.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                                   Qt.KeyboardModifier.NoModifier))
+assert not win.viewer.in_crop_mode
+ok("crop aspect presets: lock on entry, survive drags, re-snap live")
+
 # WB eyedropper: click → the stack's folded temperature/tint land exactly on
 # the solve for the sampled pixel; Esc cancels the mode
 from render import solve_white_balance  # noqa: E402
@@ -223,6 +262,34 @@ win.viewer.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
                                    Qt.KeyboardModifier.NoModifier))
 assert not win.viewer.in_wb_pick_mode
 ok("WB eyedropper: click solves temperature/tint, persists, Esc cancels")
+
+# vignette: V-style placement click sets the center and turns the effect
+# on; sliders edit the op in place; zero strength removes it
+win._start_vig_pick()
+assert win.viewer.in_vig_pick_mode
+vf = win.viewer._frame_rect_logical()
+click = QPointF(vf.x() + 0.25 * vf.width(), vf.y() + 0.4 * vf.height())
+win.viewer.mousePressEvent(_mev(QEvent.Type.MouseButtonPress, click,
+                                Qt.MouseButton.LeftButton))
+app.processEvents()
+assert not win.viewer.in_vig_pick_mode
+vop = win.panel.current_stack().vignette()
+assert vop is not None and abs(vop["cx"] - 0.25) < 0.02 \
+    and abs(vop["cy"] - 0.4) < 0.02 and vop["strength"] == -0.5, vop
+win.panel._vig_sliders["strength"].setValue(-80)
+win.panel._vig_sliders["radius"].setValue(60)
+app.processEvents()
+vop = win.panel.current_stack().vignette()
+assert vop["strength"] == -0.8 and vop["radius"] == 0.6, vop
+fid_v = win.viewer.current_fid
+pump(lambda: (s := win.catalog.get_stack(fid_v)) and '"vignette"' in s,
+     what="vignette persisted")
+win.panel._vig_sliders["strength"].setValue(0)
+app.processEvents()
+assert win.panel.current_stack().vignette() is None
+win._apply_external_stack(fid_v, EditStack())
+app.processEvents()
+ok("vignette: click places center, sliders edit, zero removes")
 
 # right-click hold: original (identity tune) while pressed, edits after
 fid_cmp = win.viewer.current_fid

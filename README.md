@@ -106,8 +106,9 @@ picked up automatically).
 | 0–5 | Rating (press again to clear) |
 | P / X / U | Pick / reject / unflag |
 | Z / double-click (viewer) | Fit ↔ 100 %; wheel zooms, drag pans |
-| C | Interactive crop: drag box/handles, Enter applies, Esc cancels |
+| C | Interactive crop: drag box/handles, Enter applies, Esc cancels. Aspect presets in the panel (Free/Orig/1:1/3:2/4:3/16:9, orientation-aware) |
 | W | White-balance eyedropper: click a spot that should be neutral gray (Esc cancels) |
+| V | Vignette: click to place the center; strength (± = darken/brighten edges) and size sliders in the panel |
 | Right-click (hold) | Compare with the original: edits bypassed while held (crop stays) |
 | Ctrl+Shift+C | Copy edit stack |
 | Ctrl+Shift+V | Paste edits onto selection (replace) |

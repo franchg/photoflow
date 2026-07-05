@@ -26,8 +26,11 @@ SECTIONS = (
     ("Viewer", (
         ("Z / double-click", "Fit ↔ 100 %"),
         ("Wheel / drag", "Zoom / pan"),
-        ("C", "Interactive crop — Enter applies, Esc cancels"),
+        ("C", "Interactive crop — Enter applies, Esc cancels; aspect "
+              "presets (3:2, 16:9, …) are in the edit panel"),
         ("W", "White-balance eyedropper: click a neutral gray — Esc cancels"),
+        ("V", "Vignette: click to place the center — strength/size sliders "
+              "in the panel"),
         ("Right-click (hold)", "Compare with the original — edits bypassed "
                                "while held"),
     )),

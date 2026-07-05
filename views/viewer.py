@@ -36,8 +36,10 @@ layout(location = 0) in vec2 a_pos;
 uniform mat4 u_mvp;
 uniform mat3 u_uv;
 out vec2 v_uv;
+out vec2 v_frame;
 void main() {
     v_uv = (u_uv * vec3(a_pos, 1.0)).xy;
+    v_frame = a_pos;
     gl_Position = u_mvp * vec4(a_pos, 0.0, 1.0);
 }
 """
@@ -196,7 +198,8 @@ _NO_LMAP = np.zeros((1, 1), dtype=np.float32)  # placeholder while no image
 
 def set_tune_uniforms(prog: QOpenGLShaderProgram, tune,
                       curve_tex: CurveTexture, lmap_tex: LmapTexture,
-                      lmap: np.ndarray) -> None:
+                      lmap: np.ndarray, vig_tex: CurveTexture,
+                      frame_size: tuple[float, float]) -> None:
     """Shared by the viewer and the shader parity test. Scalars go through
     setUniformValue1f/1i — PySide6's (str, float) overload is broken."""
     prog.setUniformValue1i("u_tex", 0)
@@ -211,6 +214,12 @@ def set_tune_uniforms(prog: QOpenGLShaderProgram, tune,
     prog.setUniformValue1f("u_sh", float(tune.shadows))
     prog.setUniformValue1f("u_sat", float(tune.saturation))
     prog.setUniformValue("u_hue", mat3_uniform(tune.hue_mat))
+    prog.setUniformValue1i("u_vig_curve", 3)
+    vig_tex.bind(tune.vig_curve, 3)
+    prog.setUniformValue1f("u_vig", float(tune.vig_strength))
+    prog.setUniformValue("u_vig_center", QVector2D(*tune.vig_center))
+    prog.setUniformValue1f("u_vig_radius", float(tune.vig_radius))
+    prog.setUniformValue("u_vig_frame", QVector2D(*frame_size))
 
 
 def default_gl_format() -> QSurfaceFormat:
@@ -229,6 +238,8 @@ class ViewerWidget(QOpenGLWidget):
     crop_canceled = Signal()
     wb_picked = Signal(float, float, float)  # source-space sRGB under the click
     wb_pick_canceled = Signal()
+    vig_center_picked = Signal(float, float)  # visible-frame coords of click
+    vig_pick_canceled = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -240,6 +251,7 @@ class ViewerWidget(QOpenGLWidget):
         self._vbo = QOpenGLBuffer(QOpenGLBuffer.Type.VertexBuffer)
         self._texture: QOpenGLTexture | None = None
         self._curve_tex = CurveTexture()
+        self._vig_tex = CurveTexture()
         self._lmap_tex = LmapTexture()
         self._lmap = _NO_LMAP            # ambiance local-mean map (per photo)
         self._lmap_fid: int | None = None
@@ -263,9 +275,12 @@ class ViewerWidget(QOpenGLWidget):
         self._crop_mode = False
         self._crop_rect = [0.0, 0.0, 1.0, 1.0]  # normalized in visible frame
         self._crop_drag = None           # (handle, start QPointF, start rect)
+        self._crop_aspect = None         # None=free, "original", or w/h float
 
         # white-balance eyedropper mode
         self._wb_pick = False
+        # vignette center placement mode
+        self._vig_pick = False
         self._sample_image = None        # CPU copy of the texture, for picking
 
         # right-click hold: compare with the original (tune bypassed;
@@ -289,6 +304,9 @@ class ViewerWidget(QOpenGLWidget):
             self.unsetCursor()
         if self._wb_pick:                # ... and the pending WB pick
             self._wb_pick = False
+            self.unsetCursor()
+        if self._vig_pick:               # ... and the vignette placement
+            self._vig_pick = False
             self.unsetCursor()
         self._show_original = False
         self._sample_image = None
@@ -318,7 +336,7 @@ class ViewerWidget(QOpenGLWidget):
 
     def set_stack(self, stack: EditStack | None, _repaint: bool = True) -> None:
         stack = stack or EditStack()
-        self._tune = TuneUniforms(stack.folded_tune())
+        self._tune = TuneUniforms(stack.folded_tune(), stack.vignette())
         old_geo, self._geo = self._geo, stack.geometry()
         if _repaint:
             if old_geo != self._geo and self._fit:
@@ -352,7 +370,46 @@ class ViewerWidget(QOpenGLWidget):
         self._crop_rect = [0.0, 0.0, 1.0, 1.0]
         self._crop_drag = None
         self._fit = True
+        self._snap_crop_aspect()
         self.update()
+
+    def set_crop_aspect(self, aspect) -> None:
+        """Lock the crop box ratio: None (free), "original", or w/h (in
+        pixels; presets follow the photo orientation — 3:2 acts as 2:3 on a
+        portrait frame). Snaps the current box when crop mode is active."""
+        self._crop_aspect = aspect
+        if self._crop_mode:
+            self._snap_crop_aspect()
+            self.update()
+
+    def _aspect_norm(self) -> float | None:
+        """Locked ratio converted to normalized-rect units (rw/rh), or None."""
+        if self._crop_aspect is None:
+            return None
+        dw, dh = self._display_size()
+        if self._crop_aspect == "original":
+            return 1.0
+        a = float(self._crop_aspect)
+        if dw < dh:
+            a = 1.0 / a          # presets follow the frame orientation
+        return a * dh / dw
+
+    def _snap_crop_aspect(self) -> None:
+        """Re-shape the current crop box to the locked ratio, keeping its
+        center and staying inside the frame."""
+        r = self._aspect_norm()
+        if r is None:
+            return
+        x, y, w, h = self._crop_rect
+        cx, cy = x + w / 2, y + h / 2
+        if w / h > r:
+            w = h * r            # target is narrower: keep height
+        else:
+            h = w / r            # target is wider: keep width
+        w, h = max(w, MIN_CROP), max(h, MIN_CROP)
+        x = min(max(cx - w / 2, 0.0), 1.0 - w)
+        y = min(max(cy - h / 2, 0.0), 1.0 - h)
+        self._crop_rect = [x, y, w, h]
 
     # ------------------------------------------------------ WB eyedropper
 
@@ -363,7 +420,7 @@ class ViewerWidget(QOpenGLWidget):
     def begin_wb_pick(self) -> None:
         """Enter eyedropper mode: the next click on the image emits the
         source-space color under the cursor; Esc cancels."""
-        if self._wb_pick or self._crop_mode or self._fid is None:
+        if self._wb_pick or self._vig_pick or self._crop_mode or self._fid is None:
             return
         self._wb_pick = True
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -375,6 +432,53 @@ class ViewerWidget(QOpenGLWidget):
             self.wb_picked.emit(*rgb)
         else:
             self.wb_pick_canceled.emit()
+
+    # ------------------------------------------------ vignette placement
+
+    @property
+    def in_vig_pick_mode(self) -> bool:
+        return self._vig_pick
+
+    def begin_vig_pick(self) -> None:
+        """Enter vignette placement: the next click on the image emits its
+        visible-frame coords as the new center; Esc cancels. A ring shows
+        the current center/radius while the mode is active."""
+        if self._vig_pick or self._wb_pick or self._crop_mode or self._fid is None:
+            return
+        self._vig_pick = True
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.update()
+
+    def _end_vig_pick(self, pos: QPointF | None) -> None:
+        self._vig_pick = False
+        self.unsetCursor()
+        self.update()
+        if pos is not None:
+            f = self._frame_rect_logical()
+            cx = (pos.x() - f.x()) / max(f.width(), 1.0)
+            cy = (pos.y() - f.y()) / max(f.height(), 1.0)
+            self.vig_center_picked.emit(min(max(cx, 0.0), 1.0),
+                                        min(max(cy, 0.0), 1.0))
+        else:
+            self.vig_pick_canceled.emit()
+
+    def _paint_vig_overlay(self) -> None:
+        """Ring at the current vignette center/radius (falloff midpoint)."""
+        f = self._frame_rect_logical()
+        cx = f.x() + self._tune.vig_center[0] * f.width()
+        cy = f.y() + self._tune.vig_center[1] * f.height()
+        half_diag = 0.5 * math.hypot(f.width(), f.height())
+        # ring where the falloff weight reaches half: t²(3-2t)·amp = 0.5
+        rad = self._tune.vig_radius * half_diag * 0.65
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(0, 0, 0, 140), 3))
+        p.drawEllipse(QPointF(cx, cy), rad, rad)
+        p.setPen(QPen(QColor(255, 255, 255, 220), 1.5))
+        p.drawEllipse(QPointF(cx, cy), rad, rad)
+        p.drawEllipse(QPointF(cx, cy), 3, 3)
+        p.end()
 
     def _sample_source_rgb(self, pos: QPointF) -> tuple[float, float, float] | None:
         """Mean sRGB (0..1) of a small source-image patch under a widget
@@ -437,10 +541,12 @@ class ViewerWidget(QOpenGLWidget):
     def _apply_crop_drag(self, handle: str, dx: float, dy: float) -> None:
         """dx/dy are deltas normalized to the frame; start rect in the drag."""
         x, y, w, h = self._crop_drag[2]
+        r = None if handle == "move" else self._aspect_norm()
         if handle == "move":
             x = min(max(x + dx, 0.0), 1.0 - w)
             y = min(max(y + dy, 0.0), 1.0 - h)
         else:
+            x0, y0, w0, h0 = x, y, w, h
             if handle in _LEFTISH:
                 nx = min(max(x + dx, 0.0), x + w - MIN_CROP)
                 w, x = x + w - nx, nx
@@ -451,8 +557,42 @@ class ViewerWidget(QOpenGLWidget):
                 h, y = y + h - ny, ny
             if handle in _BOTTOMISH:
                 h = min(max(h + dy, MIN_CROP), 1.0 - y)
+            if r is not None:
+                x, y, w, h = self._lock_drag_aspect(handle, x0, y0, w0, h0,
+                                                    w, h, r)
         self._crop_rect = [x, y, w, h]
         self.update()
+
+    def _lock_drag_aspect(self, handle, x0, y0, w0, h0, nw, nh, r):
+        """Re-fit a freely-resized box (nw, nh) to ratio r around the drag
+        anchor: corners pin the opposite corner, edges pin the opposite edge
+        and stay centered on the perpendicular axis."""
+        ax = x0 + w0 if handle in _LEFTISH else x0     # anchored x edge
+        ay = y0 + h0 if handle in _TOPPISH else y0     # anchored y edge
+        if handle in ("tl", "tr", "bl", "br"):
+            if nw * nw / r < nh * nh * r:              # dominant drag axis
+                nw = nh * r
+            avail_w = ax if handle in _LEFTISH else 1.0 - ax
+            avail_h = ay if handle in _TOPPISH else 1.0 - ay
+            nw = min(nw, avail_w, avail_h * r)
+            nw = max(nw, MIN_CROP)
+            nh = nw / r
+        elif handle in ("l", "r"):                     # width drives height
+            cy = y0 + h0 / 2
+            nh = min(nw / r, 2 * cy, 2 * (1.0 - cy))
+            nh = max(nh, MIN_CROP)
+            nw = nh * r
+            ay = cy - nh / 2
+        else:                                          # t/b: height drives
+            cx = x0 + w0 / 2
+            nw = min(nh * r, 2 * cx, 2 * (1.0 - cx))
+            nw = max(nw, MIN_CROP)
+            nh = nw / r
+            ax = cx - nw / 2
+        x = ax - nw if handle in _LEFTISH else ax
+        y = ay - nh if handle in _TOPPISH else ay
+        return (min(max(x, 0.0), 1.0 - nw), min(max(y, 0.0), 1.0 - nh),
+                nw, nh)
 
     def _paint_crop_overlay(self) -> None:
         p = QPainter(self)
@@ -523,6 +663,7 @@ class ViewerWidget(QOpenGLWidget):
             self._texture.destroy()
             self._texture = None
         self._curve_tex.destroy()
+        self._vig_tex.destroy()
         self._lmap_tex.destroy()
         self._vbo.destroy()
         self._vao.destroy()
@@ -624,8 +765,10 @@ class ViewerWidget(QOpenGLWidget):
         prog.setUniformValue("u_mvp", mvp)
         prog.setUniformValue("u_uv", mat3_uniform(uv))
         set_tune_uniforms(prog, self._effective_tune(), self._curve_tex,
-                          self._lmap_tex, self._lmap)
+                          self._lmap_tex, self._lmap, self._vig_tex,
+                          self._display_size())
         f.glDrawArrays(_GL_TRIANGLE_STRIP, 0, 4)
+        self._vig_tex.release(3)
         self._lmap_tex.release(2)
         self._curve_tex.release(1)
         self._texture.release(0)
@@ -634,6 +777,8 @@ class ViewerWidget(QOpenGLWidget):
 
         if self._crop_mode:
             self._paint_crop_overlay()
+        if self._vig_pick:
+            self._paint_vig_overlay()
         if self._show_original:
             self._paint_original_badge()
 
@@ -689,7 +834,7 @@ class ViewerWidget(QOpenGLWidget):
     def mousePressEvent(self, ev) -> None:
         if ev.button() == Qt.MouseButton.RightButton:
             if (self._fid is not None and not self._crop_mode
-                    and not self._wb_pick):
+                    and not self._wb_pick and not self._vig_pick):
                 self._show_original = True
                 self.update()
             return
@@ -704,6 +849,10 @@ class ViewerWidget(QOpenGLWidget):
             rgb = self._sample_source_rgb(ev.position())
             if rgb is not None:          # clicks off the image keep the mode
                 self._end_wb_pick(rgb)
+            return
+        if self._vig_pick:
+            if self._frame_rect_logical().contains(ev.position()):
+                self._end_vig_pick(ev.position())
             return
         self._drag_start = ev.position()
         self._pan_start = QPointF(self._pan)
@@ -724,7 +873,7 @@ class ViewerWidget(QOpenGLWidget):
                 else:
                     self.unsetCursor()
             return
-        if self._wb_pick:
+        if self._wb_pick or self._vig_pick:
             return                        # keep the cross cursor, no panning
         if self._drag_start is not None:
             dpr = self.devicePixelRatioF()
@@ -757,6 +906,10 @@ class ViewerWidget(QOpenGLWidget):
             return
         if self._wb_pick and k == Qt.Key.Key_Escape:
             self._end_wb_pick(None)
+            ev.accept()
+            return
+        if self._vig_pick and k == Qt.Key.Key_Escape:
+            self._end_vig_pick(None)
             ev.accept()
             return
         if k in (Qt.Key.Key_Left, Qt.Key.Key_Up):

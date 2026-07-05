@@ -10,11 +10,11 @@ to history + thumbnail re-render.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget,
+from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QPushButton, QSlider,
                                QVBoxLayout, QWidget)
 
-from editstack import EditStack, Op
+from editstack import VIGNETTE_DEFAULTS, EditStack, Op
 
 # Snapseed's Tune Image set, in its order. The stack key for Brightness stays
 # "exposure" (schema compat); "hue" remains valid in stacks but has no slider.
@@ -31,6 +31,12 @@ SLIDER_LABELS = {
     "tint": "Tint",
 }
 
+# crop aspect presets: label -> value for ViewerWidget.set_crop_aspect
+# (None = free, "original" = the visible frame's ratio, floats follow the
+# photo orientation: 3:2 acts as 2:3 on portrait frames)
+CROP_ASPECTS = (("Free", None), ("Orig", "original"), ("1:1", 1.0),
+                ("3:2", 1.5), ("4:3", 4.0 / 3.0), ("16:9", 16.0 / 9.0))
+
 
 class StackPanel(QWidget):
     stack_edited = Signal(object, bool)   # (EditStack, final)
@@ -39,7 +45,9 @@ class StackPanel(QWidget):
     paste_append_requested = Signal()
     apply_last_requested = Signal()
     crop_requested = Signal()             # start interactive crop in the viewer
+    crop_aspect_selected = Signal(object)  # aspect value from CROP_ASPECTS
     wb_pick_requested = Signal()          # start the WB eyedropper in the viewer
+    vig_pick_requested = Signal()         # start vignette placement in the viewer
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,13 +73,42 @@ class StackPanel(QWidget):
             "White balance: click a spot that should be neutral gray (W) — "
             "Esc cancels")
         self._btn_wb.clicked.connect(self.wb_pick_requested)
+        self._btn_vig = QPushButton("Vig")
+        self._btn_vig.setToolTip(
+            "Vignette: click the image to place the center (V) — strength "
+            "and size below; Esc cancels")
+        self._btn_vig.clicked.connect(self.vig_pick_requested)
         self._btn_clear = QPushButton("Clear")
         self._btn_clear.setToolTip("Remove every op from the stack")
         self._btn_clear.clicked.connect(self._clear)
         for b in (self._btn_rotate, self._btn_crop, self._btn_wb,
-                  self._btn_clear):
+                  self._btn_vig, self._btn_clear):
             ops_row.addWidget(b)
         root.addLayout(ops_row)
+
+        # crop aspect presets: checking one while not cropping also starts
+        # the crop (the app wires crop_aspect_selected accordingly)
+        aspect_row = QHBoxLayout()
+        aspect_row.setSpacing(2)
+        self._aspect_group = QButtonGroup(self)
+        self._aspect_group.setExclusive(True)
+        self._aspect_buttons = {}
+        for label, value in CROP_ASPECTS:
+            b = QPushButton(label)
+            b.setCheckable(True)
+            b.setStyleSheet("padding: 3px 2px;")  # six across a narrow panel
+            b.setMinimumWidth(30)
+            b.setToolTip("Crop box ratio — presets follow the photo "
+                         "orientation" if value not in (None, "original")
+                         else {None: "Freeform crop box",
+                               "original": "Keep the photo's own ratio"}[value])
+            self._aspect_group.addButton(b)
+            self._aspect_buttons[label] = (b, value)
+            b.clicked.connect(lambda _=False, v=value:
+                              self.crop_aspect_selected.emit(v))
+            aspect_row.addWidget(b)
+        self._aspect_buttons["Free"][0].setChecked(True)
+        root.addLayout(aspect_row)
 
         # rotation slider: total stack rotation in 0.1° steps; multiples of
         # 90 keep the lossless-export path, anything else resamples
@@ -92,6 +129,30 @@ class StackPanel(QWidget):
         rot_row.addWidget(self._rot_slider, 1)
         rot_row.addWidget(self._rot_value)
         root.addLayout(rot_row)
+
+        # vignette sliders; the center comes from the Vig placement mode
+        self._vig_sliders = {}
+        self._vig_values = {}
+        for key, label, lo, hi in (("strength", "Vignette", -100, 100),
+                                   ("radius", "Vig size", 10, 200)):
+            row = QHBoxLayout()
+            name = QLabel(label)
+            name.setMinimumWidth(78)
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(lo, hi)
+            slider.setValue(0 if key == "strength" else 100)
+            value = QLabel("0" if key == "strength" else "100")
+            value.setMinimumWidth(38)
+            value.setAlignment(Qt.AlignmentFlag.AlignRight)
+            slider.valueChanged.connect(
+                lambda v, k=key: self._vignette_changed(k, v))
+            slider.sliderReleased.connect(self._slider_released)
+            row.addWidget(name)
+            row.addWidget(slider, 1)
+            row.addWidget(value)
+            root.addLayout(row)
+            self._vig_sliders[key] = slider
+            self._vig_values[key] = value
 
         self._list = QListWidget()
         self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -192,6 +253,13 @@ class StackPanel(QWidget):
     def current_stack(self) -> EditStack:
         return self._stack
 
+    def crop_aspect(self):
+        """The currently selected crop-aspect value (see CROP_ASPECTS)."""
+        for label, (btn, value) in self._aspect_buttons.items():
+            if btn.isChecked():
+                return value
+        return None
+
     @property
     def current_fid(self) -> int | None:
         return self._fid
@@ -222,6 +290,15 @@ class StackPanel(QWidget):
         self._rot_slider.setValue(round(deg * 10))
         self._rot_slider.blockSignals(False)
         self._rot_value.setText(f"{deg:+g}°" if deg else "0°")
+        vig = self._stack.last_vignette()
+        s = round((vig.params.get("strength", 0.0) if vig else 0.0) * 100)
+        r = round((vig.params.get("radius", 1.0) if vig else 1.0) * 100)
+        for key, val, neutral in (("strength", s, 0), ("radius", r, 100)):
+            self._vig_sliders[key].blockSignals(True)
+            self._vig_sliders[key].setValue(val)
+            self._vig_sliders[key].blockSignals(False)
+            self._vig_values[key].setText(f"{val:+d}" if key == "strength"
+                                          and val else str(val))
 
     # -- edits ------------------------------------------------------------------
 
@@ -257,6 +334,51 @@ class StackPanel(QWidget):
         self._emit(final=not self._sliders[key].isSliderDown())
 
     def _slider_released(self) -> None:
+        self._emit(final=True)
+
+    def _ensure_vignette(self) -> Op:
+        vig = self._stack.last_vignette()
+        if vig is None:
+            params = dict(VIGNETTE_DEFAULTS)
+            params["radius"] = self._vig_sliders["radius"].value() / 100.0
+            vig = Op("vignette", params)
+            self._stack.ops.append(vig)
+            self._rebuild_list()
+        return vig
+
+    def _vignette_changed(self, key: str, raw: int) -> None:
+        if self._loading:
+            return
+        if key == "radius" and self._stack.last_vignette() is None:
+            self._vig_values[key].setText(str(raw))  # size pre-set, no op yet
+            return
+        vig = self._ensure_vignette()
+        vig.params[key] = raw / 100.0
+        if key == "strength" and raw == 0 and vig is self._stack.ops[-1]:
+            self._stack.ops.pop()          # zero strength = no vignette
+            self._rebuild_list()
+        else:
+            row = self._stack.ops.index(vig) if vig in self._stack.ops else -1
+            if 0 <= row < self._list.count():
+                self._list.blockSignals(True)
+                self._list.item(row).setText(vig.summary())
+                self._list.blockSignals(False)
+        self._vig_values[key].setText(f"{raw:+d}" if key == "strength"
+                                      and raw else str(raw))
+        self._emit(final=not self._vig_sliders[key].isSliderDown())
+
+    def set_vignette_center(self, cx: float, cy: float) -> None:
+        """Commit path for the viewer's vignette placement click. Placing a
+        center with zero strength turns the vignette on at a visible -50."""
+        if self._fid is None:
+            return
+        vig = self._ensure_vignette()
+        vig.params["cx"] = round(cx, 4)
+        vig.params["cy"] = round(cy, 4)
+        if not vig.params.get("strength", 0.0):
+            vig.params["strength"] = -0.5
+        self._rebuild_list()
+        self._load_sliders()
         self._emit(final=True)
 
     def _rotation_changed(self, raw: int) -> None:

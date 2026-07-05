@@ -165,6 +165,35 @@ def main() -> None:
     check("fine rotation turns clockwise",
           out_f[5, ow_f // 2, 0] < 60 and out_f[-5, ow_f // 2, 0] > 200,
           f"{out_f[5, ow_f//2, 0]} {out_f[-5, ow_f//2, 0]}")
+
+    # vignette: op validation, fold, and the spatial falloff itself
+    try:
+        validate_op(Op("vignette", {"cx": 1.5}))
+        check("validate rejects bad vignette", False)
+    except StackError:
+        check("validate rejects bad vignette", True)
+    vst = EditStack([Op("vignette", {"cx": 0.3, "cy": 0.4, "radius": 0.8,
+                                     "strength": -0.7})])
+    vig = vst.vignette()
+    check("vignette fold + has_edits", vig is not None
+          and vig["strength"] == -0.7 and vst.has_edits()
+          and not vst.only_rotations())
+    check("zero-strength vignette is a no-op",
+          EditStack([Op("vignette", {"strength": 0.0})]).vignette() is None
+          and not EditStack([Op("vignette", {"strength": 0.0})]).has_edits())
+    gray_img = np.full((300, 400, 3), 150, dtype=np.uint8)
+    u_vig = render.TuneUniforms(vst.folded_tune(), vig)
+    out_v = render.apply_tune_uint8(gray_img, u_vig)
+    center_px = out_v[int(0.4 * 300), int(0.3 * 400), 0]
+    corner_px = out_v[-3, -3, 0]
+    check("vignette darkens far corner, spares the center",
+          abs(int(center_px) - 150) <= 2 and corner_px < 110,
+          f"center {center_px} corner {corner_px}")
+    up = render.TuneUniforms(vst.folded_tune(),
+                             {**vig, "strength": 0.7})
+    out_vp = render.apply_tune_uint8(gray_img, up)
+    check("positive vignette brightens edges",
+          out_vp[-3, -3, 0] > 190, str(out_vp[-3, -3, 0]))
     try:
         validate_op(Op("tune", {"exposure": 2.0}))
         check("validate rejects |p|>1", False)

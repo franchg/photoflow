@@ -147,7 +147,7 @@ def export_one(item: ExportItem, opts: ExportOptions) -> str:
     """Returns the output path; raises on failure."""
     stack = _load_stack(item.stack_json)
     geo = stack.geometry()
-    tune = render.TuneUniforms(stack.folded_tune())
+    tune = render.TuneUniforms(stack.folded_tune(), stack.vignette())
     has_edits = stack.has_edits()
     src_ext = os.path.splitext(item.path)[1].lower() or ".jpg"
     out_path = _unique_dest(opts.dest_dir,

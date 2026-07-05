@@ -115,6 +115,14 @@ rolls off softly instead of hard-clamping; warming shifts mid-tones but
 barely touches white. Each response is `x + Σ ampₖ(|s|)·shapeₖ(x)` with
 one or two polynomial/sine (shape, amp) pairs per slider sign.
 
+Vignette is its own op (`{cx, cy, radius, strength}`, center placeable by
+clicking, radius as a fraction of the half frame diagonal). It renders as
+a blend toward the fitted brightness curve at `strength`, weighted by a
+radial falloff fit to Snapseed's vignette mask (smoothstep knots 0.10/1.24,
+amp 1.174) — so edges get tone-mapped darkening/lift that never crushes to
+black. GPU: a second curve texture + the frame-position varying; CPU: the
+same math in apply_tune.
+
 Ambiance was calibrated by measurement, not from assets: Snapseed ships no
 curve table for it, so `tools/ambiance_calib.py` generates a chart (gray
 ramps, color patches, surround-probes, checkerboards) that was run through

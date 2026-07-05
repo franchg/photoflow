@@ -84,6 +84,7 @@ def main():
     prog.setAttributeBuffer(0, 0x1406, 0, 2)
 
     curve_tex = CurveTexture()
+    vig_tex = CurveTexture()
     lmap_tex = LmapTexture()
     lmap = render.local_mean_luma(src)  # == what apply_tune_uint8 computes
 
@@ -99,7 +100,8 @@ def main():
         tex.bind(0)
         prog.setUniformValue("u_mvp", mvp)
         prog.setUniformValue("u_uv", mat3_uniform(uv3x3))
-        set_tune_uniforms(prog, tune, curve_tex, lmap_tex, lmap)
+        set_tune_uniforms(prog, tune, curve_tex, lmap_tex, lmap, vig_tex,
+                          (out_w, out_h))
         f.glDrawArrays(0x0005, 0, 4)  # GL_TRIANGLE_STRIP
         img = fbo.toImage().convertToFormat(QImage.Format.Format_RGB888)
         fbo.release()
@@ -113,8 +115,10 @@ def main():
                                    "saturation": 0.4, "hue": 0.15,
                                    "temperature": -0.3, "tint": 0.2,
                                    "ambiance": 0.4,
-                                   "highlights": 0.5, "shadows": -0.4})])
-    tune = render.TuneUniforms(stack.folded_tune())
+                                   "highlights": 0.5, "shadows": -0.4}),
+                       Op("vignette", {"cx": 0.35, "cy": 0.6,
+                                       "radius": 0.8, "strength": -0.6})])
+    tune = render.TuneUniforms(stack.folded_tune(), stack.vignette())
     gpu = gl_render(W, H, tune, np.eye(3))
     cpu = render.apply_tune_uint8(src, tune)
     mad = float(np.mean(np.abs(gpu.astype(int) - cpu.astype(int))))
@@ -149,6 +153,7 @@ def main():
 
     tex.destroy()
     curve_tex.destroy()
+    vig_tex.destroy()
     lmap_tex.destroy()
     vbo.destroy()
     vao.destroy()

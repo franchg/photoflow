@@ -341,10 +341,24 @@ def _clamp1(v: float) -> float:
     return max(-1.0, min(1.0, v))
 
 
+# Vignette falloff: weight(d) = min(VIG_AMP·smoothstep(K0, K1, d), 1) with
+# d = pixel distance from the center ÷ (radius · half frame diagonal) — a
+# least-squares fit of Snapseed's radial vignette mask (rms 0.014). The
+# weight blends toward the fitted brightness response at `strength`, so
+# edges get real tone-mapped darkening/lift instead of a flat multiply.
+VIG_KNOTS = (0.10, 1.24)
+VIG_AMP = 1.174
+
+
+def vignette_weight(d: np.ndarray) -> np.ndarray:
+    t = np.clip((d - VIG_KNOTS[0]) / (VIG_KNOTS[1] - VIG_KNOTS[0]), 0.0, 1.0)
+    return np.minimum(VIG_AMP * t * t * (3.0 - 2.0 * t), 1.0)
+
+
 class TuneUniforms:
     """The exact values the fragment shader receives (and numpy consumes)."""
 
-    def __init__(self, folded: FoldedTune):
+    def __init__(self, folded: FoldedTune, vignette: dict | None = None):
         amb = _clamp1(folded.ambiance)
         contrast = float(folded.contrast_factor) - 1.0
         self.curve_is_identity = (folded.exposure == 0 and contrast == 0.0
@@ -358,7 +372,17 @@ class TuneUniforms:
         self.highlights = _clamp1(folded.highlights) * K_HIGHLIGHTS
         self.shadows = _clamp1(folded.shadows) * K_SHADOWS
         self.hue_mat = hue_matrix(folded.hue)
-        self.identity = folded.is_identity()
+        if vignette is not None and vignette.get("strength", 0.0):
+            self.vig_strength = _clamp1(float(vignette["strength"]))
+            self.vig_center = (float(vignette["cx"]), float(vignette["cy"]))
+            self.vig_radius = max(0.1, min(2.0, float(vignette["radius"])))
+            self.vig_curve = build_tone_curve(brightness=self.vig_strength)
+        else:
+            self.vig_strength = 0.0
+            self.vig_center = (0.5, 0.5)
+            self.vig_radius = 1.0
+            self.vig_curve = identity_curve()
+        self.identity = folded.is_identity() and self.vig_strength == 0.0
 
 
 def apply_tune(rgb_float: np.ndarray, u: TuneUniforms, lmap=None,
@@ -393,7 +417,19 @@ def apply_tune(rgb_float: np.ndarray, u: TuneUniforms, lmap=None,
     luma = srgb @ LUMA
     out = luma[..., None] + (srgb - luma[..., None]) * u.saturation
     out = out @ u.hue_mat.T
-    return np.clip(out, 0.0, 1.0, out=out)
+    np.clip(out, 0.0, 1.0, out=out)
+    if u.vig_strength != 0.0:
+        fh, fw = full_size if full_size is not None else out.shape[:2]
+        ys = (np.arange(y0, y0 + out.shape[0], dtype=np.float32) + 0.5) / fh
+        xs = (np.arange(out.shape[1], dtype=np.float32) + 0.5) / fw
+        dx = (xs - u.vig_center[0]) * fw
+        dy = (ys - u.vig_center[1]) * fh
+        half_diag = 0.5 * math.sqrt(fw * fw + fh * fh)
+        d = np.sqrt(dx[None, :] ** 2 + dy[:, None] ** 2) / np.float32(
+            u.vig_radius * half_diag)
+        m = vignette_weight(d)[..., None].astype(np.float32)
+        out = out + (sample_curve(out, u.vig_curve) - out) * m
+    return out
 
 
 def apply_tune_uint8(rgb: np.ndarray, u: TuneUniforms,
@@ -403,10 +439,11 @@ def apply_tune_uint8(rgb: np.ndarray, u: TuneUniforms,
     if u.identity:
         return rgb
     lmap = local_mean_luma(rgb) if u.ambiance != 0.0 else None
+    full_size = rgb.shape[:2]
     out = np.empty_like(rgb)
     for y in range(0, rgb.shape[0], chunk_rows):
         block = rgb[y:y + chunk_rows].astype(np.float32) / 255.0
-        block = apply_tune(block, u, lmap, y, rgb.shape[:2])
+        block = apply_tune(block, u, lmap, y, full_size)
         out[y:y + chunk_rows] = (block * 255.0 + 0.5).astype(np.uint8)
     return out
 
@@ -475,4 +512,5 @@ def render_stack(rgb: np.ndarray, stack: EditStack) -> np.ndarray:
     """Full CPU render: geometry then folded tune. uint8 in, uint8 out.
     This is the export path and the edited-thumbnail path."""
     rgb = apply_geometry(rgb, stack.geometry())
-    return apply_tune_uint8(rgb, TuneUniforms(stack.folded_tune()))
+    return apply_tune_uint8(rgb, TuneUniforms(stack.folded_tune(),
+                                              stack.vignette()))
