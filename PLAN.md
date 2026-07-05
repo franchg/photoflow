@@ -93,12 +93,20 @@ Ambiance is not its own stage: it folds into saturation, shadows-lift, and
 (negative only) contrast — +1 reads "colorful and happy", −1 "contrasty and
 less colorful".
 
+**Color**: sRGB is the working space. ICC-tagged sources (JPEG APP2, PNG
+iCCP — Adobe RGB, Display P3) convert to sRGB at decode via Qt's
+QColorSpace/QColorTransform, so thumbs, viewer, edit math and export all
+see sRGB; untagged/sRGB input pays nothing. Exports are always sRGB:
+tagged explicitly (sRGB ICC + `Exif.Photo.ColorSpace`), source profiles
+never copied.
+
 Export renders the identical math full-res in numpy (chunked), encodes with
-libjpeg-turbo, and copies EXIF via pyexiv2 (ICC retried without profile on
-corrupt input). PNG in → PNG out, lossless; quality slider is JPEG-only.
-Special cases: rotation-only stacks export via lossless `jpegtran -perfect`
-when available; a no-edit export is a byte copy. File naming is a token
-pattern (`[FILE_NAME] [Y] [M] [D] [H] [m] [s] [SEQ]`) with EXIF-date
+libjpeg-turbo, and copies EXIF via pyexiv2 (never the source ICC). PNG in →
+PNG out, lossless; quality slider is JPEG-only. Special cases: rotation-only
+stacks export via lossless `jpegtran -perfect` when available; a no-edit
+export is a byte copy — both shortcuts only for sources that are already
+sRGB/untagged, since preserved bytes can't be converted. File naming is a
+token pattern (`[FILE_NAME] [Y] [M] [D] [H] [m] [s] [SEQ]`) with EXIF-date
 fallback to mtime, sanitization, and collision suffixing.
 
 ## Architecture
@@ -212,7 +220,10 @@ UI thread never blocks on I/O or pixels; paste-on-500 stays responsive.
 
 ## Deliberately not built (revisit on demand)
 
-- RAW or formats beyond JPEG/PNG; color management (sRGB assumed).
+- RAW or formats beyond JPEG/PNG.
+- Monitor-profile color management (wide-gamut display mapping) — input
+  profiles *are* handled (converted to sRGB at decode); the output side is
+  left to the compositor, which Wayland is increasingly taking over.
 - Local/selective edits, healing, curves.
 - XMP sidecars (SQLite is the source of truth; versioned stack JSON keeps
   the door open).

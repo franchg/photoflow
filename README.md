@@ -104,6 +104,14 @@ moving the binary is fine.
   eyedropper (W, or the WB button) samples the clicked source pixel and
   solves temperature/tint in linear space so that pixel renders exactly
   neutral — every stage after white balance maps neutral to neutral.
+- Color: sRGB is the working space. ICC-tagged sources (Adobe RGB cameras,
+  Display P3 phones) convert to sRGB at decode — one spot in `decode.py`
+  covers thumbs, viewer and export alike. Exports are **always sRGB** for
+  maximum compatibility: tagged explicitly (sRGB ICC + EXIF ColorSpace),
+  source profiles never copied, and tagged sources skip the byte-copy /
+  lossless-rotate shortcuts so pixels actually get converted. Thumbnails
+  cached before this feature refresh after Ctrl+R or Settings → Clear
+  thumbnail cache.
 - Thumbnails: EXIF-embedded thumbs paint first, then 1/8-scale libjpeg-turbo
   decodes replace them; everything is cached in SQLite keyed by
   `(path, mtime, size)`. The catalog lives in `~/.local/share/photoflow/`.

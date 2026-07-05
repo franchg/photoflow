@@ -126,21 +126,19 @@ def _resize_exact(arr: np.ndarray, long_edge: int) -> np.ndarray:
 
 
 def _copy_metadata(src: str, dst: str, out_w: int, out_h: int) -> None:
-    """Carry EXIF/IPTC/XMP/ICC over, then fix the tags we invalidated."""
+    """Carry EXIF/IPTC/XMP over — never the source ICC, exported pixels are
+    always sRGB — then fix the tags we invalidated and tag sRGB explicitly."""
     try:
         with pyexiv2.Image(src) as si, pyexiv2.Image(dst) as di:
-            try:
-                si.copy_to_another_image(di)
-            except Exception:
-                # exiv2 raises on absent/invalid ICC and aborts the whole
-                # copy — retry without it
-                si.copy_to_another_image(di, icc=False)
+            si.copy_to_another_image(di, icc=False)
         with pyexiv2.Image(dst) as di:
             di.modify_exif({
                 "Exif.Image.Orientation": "1",
                 "Exif.Photo.PixelXDimension": str(out_w),
                 "Exif.Photo.PixelYDimension": str(out_h),
+                "Exif.Photo.ColorSpace": "1",  # 1 = sRGB
             })
+            di.modify_icc(decode.srgb_icc_profile())
     except Exception:
         pass  # metadata is best-effort; pixels already exported
 
@@ -156,17 +154,22 @@ def export_one(item: ExportItem, opts: ExportOptions) -> str:
                             render_name(opts.name_pattern, item) + src_ext)
 
     with open(item.path, "rb") as f:
-        prefix = f.read(decode.EXIF_PREFIX_BYTES)
-    src_is_png = decode.is_png(prefix)
-    orientation = decode.parse_exif(prefix).orientation
+        data = f.read()
+    src_is_png = decode.is_png(data)
+    orientation = decode.parse_exif(data[:decode.EXIF_PREFIX_BYTES]).orientation
+    # Exports are ALWAYS sRGB: sources tagged with another profile must go
+    # through decode→convert→re-encode, never the byte-preserving paths.
+    bytes_are_srgb = not decode.needs_srgb_conversion(data)
 
     # Byte copy (also the only path that preserves PNG alpha).
-    if not has_edits and opts.resize_long is None and orientation == 1:
+    if (not has_edits and opts.resize_long is None and orientation == 1
+            and bytes_are_srgb):
         shutil.copyfile(item.path, out_path)
         return out_path
 
     # Lossless path (JPEG only): net effect is a pure 90° rotation.
-    if (not src_is_png and opts.resize_long is None and stack.only_rotations()
+    if (bytes_are_srgb and not src_is_png and opts.resize_long is None
+            and stack.only_rotations()
             and orientation in decode.ORIENTATION_TO_CW_DEGREES):
         total = (decode.ORIENTATION_TO_CW_DEGREES[orientation]
                  + geo.cw_degrees) % 360
@@ -181,8 +184,6 @@ def export_one(item: ExportItem, opts: ExportOptions) -> str:
             os.unlink(out_path)
 
     # Pixel path. Decode no more than needed when downsizing.
-    with open(item.path, "rb") as f:
-        data = f.read()
     target = None
     if opts.resize_long is not None:
         crop_frac = min(geo.rect[2], geo.rect[3])

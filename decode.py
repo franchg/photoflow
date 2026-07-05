@@ -16,11 +16,12 @@ import struct
 import subprocess
 import sys
 import threading
+import zlib
 from typing import NamedTuple
 
 import numpy as np
-from PySide6.QtCore import QBuffer, QIODevice, Qt
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+from PySide6.QtGui import QColorSpace, QImage
 from turbojpeg import TJFLAG_FASTDCT, TJFLAG_FASTUPSAMPLE, TJPF_RGB, TurboJPEG
 
 JPEG_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif"}
@@ -89,10 +90,112 @@ def qimage_to_rgb(img: QImage) -> np.ndarray:
     return buf.reshape(h, bpl)[:, :w * 3].reshape(h, w, 3).copy()
 
 
+# ---------------------------------------------------------------------------
+# Color management: sRGB is the app's working space. ICC-tagged sources
+# (Adobe RGB cameras, Display P3 phones) are converted right here at decode,
+# so everything downstream — thumbs, viewer, edit math, export — stays sRGB.
+# (EXIF-embedded provisional thumbs are the one knowing exception: they show
+# unconverted for a moment until the real decode replaces them.)
+# ---------------------------------------------------------------------------
+
+_ICC_MARKER = b"ICC_PROFILE\x00"
+_srgb: QColorSpace | None = None
+
+
+def _srgb_space() -> QColorSpace:
+    global _srgb
+    if _srgb is None:
+        _srgb = QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+    return _srgb
+
+
+def srgb_icc_profile() -> bytes:
+    """A standard sRGB ICC blob (for tagging exports explicitly)."""
+    return bytes(_srgb_space().iccProfile())
+
+
+def parse_icc(data: bytes) -> bytes | None:
+    """Assemble the ICC profile from JPEG APP2 chunks; None if untagged."""
+    if len(data) < 4 or data[:2] != b"\xff\xd8":
+        return None
+    chunks: dict[int, bytes] = {}
+    total = 0
+    i, n = 2, len(data)
+    while i + 4 <= n:
+        if data[i] != 0xFF:
+            break
+        marker = data[i + 1]
+        if marker in (0xDA, 0xD9):  # SOS/EOI — no more metadata segments
+            break
+        if marker == 0x01 or 0xD0 <= marker <= 0xD8:
+            i += 2
+            continue
+        seg_len = struct.unpack(">H", data[i + 2:i + 4])[0]
+        payload = data[i + 4:i + 2 + seg_len]
+        if marker == 0xE2 and payload.startswith(_ICC_MARKER) and len(payload) > 14:
+            total = payload[13]
+            chunks[payload[12]] = payload[14:]
+        i += 2 + seg_len
+    if not chunks or total == 0 or len(chunks) != total:
+        return None
+    return b"".join(chunks[k] for k in sorted(chunks))
+
+
+def _png_icc(data: bytes) -> bytes | None:
+    """Extract the iCCP profile via a cheap chunk walk (Qt tags even sRGB
+    PNGs with one, so presence alone means nothing — callers compare)."""
+    i, n = 8, len(data)
+    while i + 8 <= n:
+        (length,) = struct.unpack(">I", data[i:i + 4])
+        ctype = data[i + 4:i + 8]
+        if ctype == b"iCCP":
+            payload = data[i + 8:i + 8 + length]
+            z = payload.find(b"\x00")  # name NUL, then 1 compression byte
+            if z < 0 or z + 2 >= len(payload):
+                return None
+            try:
+                return zlib.decompress(payload[z + 2:])
+            except zlib.error:
+                return None
+        if ctype == b"IDAT":
+            break
+        i += 12 + length  # length + type + data + crc
+    return None
+
+
+def needs_srgb_conversion(data: bytes) -> bool:
+    """True when the file carries a non-sRGB ICC profile — such sources must
+    re-encode on export (exports are always sRGB), never byte-copy."""
+    icc = _png_icc(data) if is_png(data) else parse_icc(data)
+    if icc is None:
+        return False
+    cs = QColorSpace.fromIccProfile(QByteArray(icc))
+    return cs.isValid() and cs != _srgb_space()
+
+
+def convert_to_srgb(rgb: np.ndarray, icc: bytes | None) -> np.ndarray:
+    """Map ICC-tagged pixels into sRGB. Untagged, already-sRGB, or
+    unparseable (LUT-based etc.) profiles return the input unchanged."""
+    if not icc:
+        return rgb
+    cs = QColorSpace.fromIccProfile(QByteArray(icc))
+    if not cs.isValid() or cs == _srgb_space():
+        return rgb
+    if not rgb.flags["C_CONTIGUOUS"]:
+        rgb = np.ascontiguousarray(rgb)
+    h, w = rgb.shape[:2]
+    img = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
+    img.applyColorTransform(cs.transformationToColorSpace(_srgb_space()))
+    return qimage_to_rgb(img)
+
+
 def _decode_png(data: bytes, target_long_edge: int | None) -> np.ndarray:
     img = QImage.fromData(data)
     if img.isNull():
         raise ValueError("cannot decode PNG")
+    cs = img.colorSpace()
+    if cs.isValid() and cs != _srgb_space():
+        img.convertToColorSpace(_srgb_space())
     if (target_long_edge is not None
             and max(img.width(), img.height()) > target_long_edge):
         if img.width() >= img.height():
@@ -130,7 +233,8 @@ def decode_scaled(data: bytes, target_long_edge: int | None = None,
         w, h = read_header(data)
         sf = pick_scale(w, h, target_long_edge)
     flags = (TJFLAG_FASTDCT | TJFLAG_FASTUPSAMPLE) if fast else 0
-    return tj.decode(data, pixel_format=TJPF_RGB, scaling_factor=sf, flags=flags)
+    rgb = tj.decode(data, pixel_format=TJPF_RGB, scaling_factor=sf, flags=flags)
+    return convert_to_srgb(rgb, parse_icc(data))
 
 
 def encode_jpeg(rgb: np.ndarray, quality: int = 87) -> bytes:
@@ -144,6 +248,7 @@ def encode_png(rgb: np.ndarray) -> bytes:
         rgb = np.ascontiguousarray(rgb)
     h, w = rgb.shape[:2]
     img = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
+    img.setColorSpace(_srgb_space())  # write the sRGB chunk — exports are sRGB
     buf = QBuffer()
     buf.open(QIODevice.OpenModeFlag.WriteOnly)
     img.save(buf, "PNG")

@@ -318,6 +318,63 @@ def main() -> None:
     w, h = decode.read_header(open(out, "rb").read())
     check("oriented source baked", (w, h) == (240, 320), f"{(w, h)}")
 
+    # ---- color management: tagged sources normalize to sRGB ---------------
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QColorSpace, QImage
+
+    srgb_cs = QColorSpace(QColorSpace.NamedColorSpace.SRgb)
+    adobe_cs = QColorSpace(QColorSpace.NamedColorSpace.AdobeRgb)
+    grad = np.zeros((96, 96, 3), np.uint8)
+    grad[..., 0] = np.linspace(20, 235, 96).astype(np.uint8)[None, :]
+    grad[..., 1] = np.linspace(235, 20, 96).astype(np.uint8)[:, None]
+    grad[..., 2] = 96  # saturated mix so the gamut difference is visible
+    qi = QImage(grad.data, 96, 96, 288, QImage.Format.Format_RGB888)
+    qi.setColorSpace(srgb_cs)
+    adobe_qi = qi.copy()
+    adobe_qi.convertToColorSpace(adobe_cs)
+    adobe_px = decode.qimage_to_rgb(adobe_qi)
+    check("adobe numbers differ from sRGB",  # else the tests below prove nothing
+          float(np.mean(np.abs(adobe_px.astype(int) - grad.astype(int)))) > 2.0)
+
+    tagged = os.path.join(tmp, "adobe.jpg")
+    with open(tagged, "wb") as f:
+        f.write(decode.encode_jpeg(adobe_px, 97))
+    with pyexiv2.Image(tagged) as im:
+        im.modify_icc(bytes(adobe_cs.iccProfile()))
+    tagged_bytes = open(tagged, "rb").read()
+    check("parse_icc roundtrip",
+          decode.parse_icc(tagged_bytes) == bytes(adobe_cs.iccProfile()))
+    check("needs_srgb_conversion: tagged yes, untagged no",
+          decode.needs_srgb_conversion(tagged_bytes)
+          and not decode.needs_srgb_conversion(open(plain, "rb").read()))
+    dec = decode.decode_scaled(tagged_bytes, fast=False)
+    cm_mad = float(np.mean(np.abs(dec.astype(int) - grad.astype(int))))
+    check("tagged JPEG decodes to sRGB", cm_mad < 3.0, f"mad={cm_mad}")
+
+    # exports are ALWAYS sRGB: tagged source → re-encode, pixels + tag sRGB
+    out = export_one(ExportItem(1, tagged, None), ExportOptions(dest, quality=97))
+    check("tagged export never byte-copies",
+          open(out, "rb").read() != tagged_bytes)
+    oe = decode.decode_scaled(open(out, "rb").read(), fast=False)
+    cm2 = float(np.mean(np.abs(oe.astype(int) - grad.astype(int))))
+    check("tagged export pixels are sRGB", cm2 < 4.0, f"mad={cm2}")
+    with pyexiv2.Image(out) as im:
+        out_icc = im.read_icc()
+        out_exif = im.read_exif()
+    check("tagged export labeled sRGB",
+          out_exif.get("Exif.Photo.ColorSpace") == "1" and bool(out_icc)
+          and QColorSpace.fromIccProfile(QByteArray(out_icc)) == srgb_cs)
+
+    # tagged PNG (iCCP) converts at decode too
+    pbuf = QBuffer()
+    pbuf.open(QIODevice.OpenModeFlag.WriteOnly)
+    adobe_qi.save(pbuf, "PNG")
+    png_tagged = bytes(pbuf.data())
+    check("png iCCP detected", decode.needs_srgb_conversion(png_tagged))
+    pdec = decode.decode_scaled(png_tagged)
+    pm = float(np.mean(np.abs(pdec.astype(int) - grad.astype(int))))
+    check("tagged PNG decodes to sRGB", pm < 2.0, f"mad={pm}")
+
     # ---- export naming patterns ------------------------------------------------
     named = ExportItem(1, "/x/DSC_0042.jpg", None,
                        capture_dt="2024-07-04 12:34:56", mtime=0.0, seq=7)
