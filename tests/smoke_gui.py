@@ -224,6 +224,24 @@ win.viewer.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
 assert not win.viewer.in_wb_pick_mode
 ok("WB eyedropper: click solves temperature/tint, persists, Esc cancels")
 
+# right-click hold: original (identity tune) while pressed, edits after
+fid_cmp = win.viewer.current_fid
+win._apply_external_stack(fid_cmp, EditStack([Op("tune", {"exposure": 0.5})]))
+app.processEvents()
+assert not win.viewer._effective_tune().identity
+win.viewer.mousePressEvent(QMouseEvent(
+    QEvent.Type.MouseButtonPress, wb_pos, QPointF(0, 0),
+    Qt.MouseButton.RightButton, Qt.MouseButton.RightButton,
+    Qt.KeyboardModifier.NoModifier))
+assert win.viewer._show_original and win.viewer._effective_tune().identity
+win.viewer.mouseReleaseEvent(QMouseEvent(
+    QEvent.Type.MouseButtonRelease, wb_pos, QPointF(0, 0),
+    Qt.MouseButton.RightButton, Qt.MouseButton.NoButton,
+    Qt.KeyboardModifier.NoModifier))
+assert (not win.viewer._show_original
+        and not win.viewer._effective_tune().identity)
+ok("right-click hold: original while pressed, edits restored on release")
+
 # fullscreen: F from the grid enters and exits (window shortcut), chrome hides
 from PySide6.QtTest import QTest  # noqa: E402
 
@@ -373,12 +391,12 @@ ok("grid size selector: S/M/L applied + persisted")
 # settings dialog fields round-trip
 from views.settingsdialog import SettingsDialog  # noqa: E402
 
-dlg = SettingsDialog(win, theme="dark", show_hidden=True,
+dlg = SettingsDialog(win, theme="dark", show_hidden=True, ui_scale=1.25,
                      catalog_path="/tmp/x.db", on_empty_catalog=lambda: None)
-assert dlg.values() == {"theme": "dark", "show_hidden": True,
+assert dlg.values() == {"theme": "dark", "ui_scale": 1.25, "show_hidden": True,
                         "catalog_path": "/tmp/x.db"}
 dlg.deleteLater()
-ok("settings dialog: fields round-trip")
+ok("settings dialog: fields round-trip (incl. UI scale)")
 
 # catalog relocation + empty — on a TEMP db, never the user's real catalog
 tmp_db = os.path.join(folder, "test-catalog.db")
@@ -396,6 +414,53 @@ pump(lambda: not any(e.has_edits for e in win.model.entries())
      what="catalog emptied")
 win.settings.remove("catalog_path")  # don't leak the temp path to real runs
 ok("catalog: relocate to new path + empty, both followed by clean rescan")
+
+# help dialog: F1 opens the non-modal shortcuts reference, sections populated
+from views.helpdialog import SECTIONS  # noqa: E402
+
+QTest.keyClick(win.grid, Qt.Key.Key_F1)
+app.processEvents()
+assert win._help is not None and win._help.isVisible()
+n_keys = sum(len(entries) for _, entries in SECTIONS)
+assert n_keys >= 20, n_keys
+all_keys = [k for _, entries in SECTIONS for k, _ in entries]
+assert len(all_keys) == len(set(all_keys)), "duplicate key rows"
+win._help.close()
+app.processEvents()
+ok("help dialog: F1 opens, sections populated, keys unique")
+
+# narrow window: toolbar overflow is reachable via the » extension button
+from PySide6.QtWidgets import QToolButton  # noqa: E402
+
+old_size = win.size()
+win.resize(620, 700)
+app.processEvents()
+_ext = win._toolbar.findChild(QToolButton, "qt_toolbar_ext_button")
+assert _ext is not None and _ext.isVisible()
+_h_before = win._toolbar.height()
+QTest.mouseClick(_ext, Qt.MouseButton.LeftButton)
+for _ in range(25):
+    app.processEvents()
+    time.sleep(0.02)
+assert win._toolbar.height() > _h_before + 20, (win._toolbar.height(), _h_before)
+win.resize(old_size)
+app.processEvents()
+ok("toolbar overflow: » visible at narrow widths, expands the hidden rows")
+
+# sort combo: switching to capture date actually reorders (regression:
+# sort(0, Asc) was a no-op when already name-sorted, so nothing moved)
+fid0 = win.proxy.index(0, 0).data(photoflow_app.IdRole)
+e0 = win.model.entry_by_id(fid0)
+win.model.update_meta(e0.id, e0.width, e0.height, e0.orientation,
+                      "2030-12-31 00:00:00")  # name-first, date-last
+win._sort_combo.setCurrentIndex(1)  # Capture date
+app.processEvents()
+assert win.proxy.index(0, 0).data(photoflow_app.IdRole) != fid0, \
+    "date sort did not reorder"
+win._sort_combo.setCurrentIndex(0)  # back to Name
+app.processEvents()
+assert win.proxy.index(0, 0).data(photoflow_app.IdRole) == fid0
+ok("sort combo: name ↔ capture date reorders both ways")
 
 # startup with a vanished last_folder: silent (no modal would-block popup),
 # nothing scanned, and the stale setting self-heals

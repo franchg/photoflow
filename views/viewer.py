@@ -138,6 +138,11 @@ class ViewerWidget(QOpenGLWidget):
         self._wb_pick = False
         self._sample_image = None        # CPU copy of the texture, for picking
 
+        # right-click hold: compare with the original (tune bypassed;
+        # crop/rotation stay so the framing doesn't jump mid-hold)
+        self._show_original = False
+        self._identity_tune = TuneUniforms(EditStack().folded_tune())
+
     # ------------------------------------------------------------------ API
 
     def show_image(self, fid: int, full_w: int, full_h: int,
@@ -155,6 +160,7 @@ class ViewerWidget(QOpenGLWidget):
         if self._wb_pick:                # ... and the pending WB pick
             self._wb_pick = False
             self.unsetCursor()
+        self._show_original = False
         self._sample_image = None
         self._release_texture()
         self.set_stack(stack, _repaint=False)
@@ -397,6 +403,9 @@ class ViewerWidget(QOpenGLWidget):
 
     # -- geometry helpers ---------------------------------------------------
 
+    def _effective_tune(self) -> TuneUniforms:
+        return self._identity_tune if self._show_original else self._tune
+
     def _uv_matrix(self) -> np.ndarray:
         """Visible-frame [0,1]² → source-texture UV (rotation + crop)."""
         cx, cy, cw, ch = self._geo.rect
@@ -474,7 +483,7 @@ class ViewerWidget(QOpenGLWidget):
         self._texture.bind(0)
         prog.setUniformValue("u_mvp", mvp)
         prog.setUniformValue("u_uv", mat3_uniform(uv))
-        set_tune_uniforms(prog, self._tune)
+        set_tune_uniforms(prog, self._effective_tune())
         f.glDrawArrays(_GL_TRIANGLE_STRIP, 0, 4)
         self._texture.release(0)
         self._vao.release()
@@ -482,6 +491,24 @@ class ViewerWidget(QOpenGLWidget):
 
         if self._crop_mode:
             self._paint_crop_overlay()
+        if self._show_original:
+            self._paint_original_badge()
+
+    def _paint_original_badge(self) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = p.font()
+        font.setBold(True)
+        p.setFont(font)
+        text = "Original"
+        fm = p.fontMetrics()
+        bg = QRectF(12, 12, fm.horizontalAdvance(text) + 16, fm.height() + 8)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(0, 0, 0, 150))
+        p.drawRoundedRect(bg, 6, 6)
+        p.setPen(QColor(255, 255, 255, 235))
+        p.drawText(bg, Qt.AlignmentFlag.AlignCenter, text)
+        p.end()
 
     # -- interaction -------------------------------------------------------------
 
@@ -517,6 +544,12 @@ class ViewerWidget(QOpenGLWidget):
         self._set_scale(self._current_scale() * (1.25 ** steps), anchor)
 
     def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.MouseButton.RightButton:
+            if (self._fid is not None and not self._crop_mode
+                    and not self._wb_pick):
+                self._show_original = True
+                self.update()
+            return
         if ev.button() != Qt.MouseButton.LeftButton:
             return
         if self._crop_mode:
@@ -557,6 +590,11 @@ class ViewerWidget(QOpenGLWidget):
             self.update()
 
     def mouseReleaseEvent(self, ev) -> None:
+        if ev.button() == Qt.MouseButton.RightButton:
+            if self._show_original:
+                self._show_original = False
+                self.update()
+            return
         if self._crop_mode:
             self._crop_drag = None
             return

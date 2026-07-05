@@ -137,10 +137,12 @@ removal), catalog relocation, full wipe behind a hard warning.
 
 ## Platform integration
 
-- **Theming**: System (native style/palette captured at startup, restorable
-  at runtime) or token-driven Light/Dark (`styles.py` is the single palette
-  + QSS source). All icons are feather-style SVGs generated in code and
-  tinted to the theme at runtime — no binary assets in the repo.
+- **Theming**: System (native style/palette/font captured at startup,
+  restorable at runtime) or token-driven Light/Dark (`styles.py` is the
+  single palette + QSS source), which use the bundled IBM Plex Sans
+  Condensed (`fonts/`, OFL — the repo's one binary asset) at a compact
+  10 pt. All icons are feather-style SVGs generated in code and tinted to
+  the theme at runtime.
 - **Linux desktop**: the frozen binary self-registers a `.desktop` entry +
   hicolor icons on every start (Wayland derives the dock icon from the
   desktop entry matched to the window's app id; `Exec=` follows the binary

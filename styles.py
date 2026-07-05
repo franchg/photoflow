@@ -91,6 +91,11 @@ ICON_SVGS = {
                   '<line x1="12" y1="10" x2="12" y2="18"/>'
                   '<line x1="8" y1="14" x2="16" y2="14"/>',
     "zap": '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+    "help-circle": '<circle cx="12" cy="12" r="10"/>'
+                   '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>'
+                   '<line x1="12" y1="17" x2="12.01" y2="17"/>',
+    "chevrons-right": '<polyline points="13 17 18 12 13 7"/>'
+                      '<polyline points="6 17 11 12 6 7"/>',
     "grid-small": '<rect x="3" y="3" width="18" height="18" rx="2"/>'
                   '<line x1="9" y1="3" x2="9" y2="21"/>'
                   '<line x1="15" y1="3" x2="15" y2="21"/>'
@@ -157,6 +162,17 @@ def write_app_icon(path: str, size: int = 256) -> bool:
     return img.save(path)
 
 
+# The UI font for the token themes (fonts/ ships the first family; the rest
+# are fallbacks). Lives here so build_qss can bake it into the stylesheet —
+# platform themes (GNOME) stamp per-class fonts onto buttons/labels that
+# override QApplication.setFont, but stylesheet fonts beat class fonts.
+FONT_FAMILIES = ["IBM Plex Sans Condensed",
+                 "Inter", "Adwaita Sans", "SF Pro Text", "Segoe UI Variable",
+                 "Segoe UI", "Ubuntu Sans", "Cantarell", "Noto Sans",
+                 "DejaVu Sans"]
+FONT_POINT_SIZE = 10.0  # vs the usual 11: every control compacts with it
+
+
 # ----------------------------------------------------------------------- QSS
 
 def _asset_dir() -> str:
@@ -187,8 +203,11 @@ def build_qss(t: dict) -> str:
     chevron = _write_asset("chevron-down", t["text_muted"])
     chevron_up = _write_asset("chevron-up", t["text_muted"])
     check = _write_asset("check", "#ffffff")
+    overflow = _write_asset("chevrons-right", t["text"])
+    families = ", ".join(f'"{f}"' for f in FONT_FAMILIES)
     return f"""
-* {{ outline: none; }}
+* {{ outline: none; font-family: {families};
+    font-size: {FONT_POINT_SIZE:g}pt; }}
 QMainWindow, QDialog, QMessageBox {{ background: {t['bg']}; }}
 
 QToolBar {{ background: {t['bg']}; border: none; padding: 5px; spacing: 4px; }}
@@ -197,6 +216,16 @@ QToolButton {{ background: transparent; border: none; border-radius: 8px;
 QToolButton:hover {{ background: {t['surface_alt']}; }}
 QToolButton:pressed {{ background: {t['pressed']}; }}
 QToolButton:checked {{ background: {t['accent_soft']}; }}
+
+/* toolbar overflow (»): the base style draws its arrow from the native
+   palette — invisible on our themes — so give it an explicit themed icon.
+   The layout grants it a slim fixed extent: no padding, no border. */
+QToolButton#qt_toolbar_ext_button {{
+    qproperty-icon: url({overflow});
+    background: {t['surface_alt']};
+    border: none; border-radius: 4px;
+    padding: 0px; }}
+QToolButton#qt_toolbar_ext_button:hover {{ background: {t['pressed']}; }}
 
 QPushButton {{ background: {t['surface']}; border: 1px solid {t['border']};
     border-radius: 8px; padding: 6px 14px; color: {t['text']}; }}

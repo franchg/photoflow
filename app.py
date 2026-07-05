@@ -13,7 +13,7 @@ import sys
 import time
 from collections import OrderedDict
 
-from PySide6.QtCore import QFile, QSettings, QSize, Qt, QTimer
+from PySide6.QtCore import QFile, QProcess, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import (QAction, QColor, QKeySequence, QPalette, QShortcut,
                            QSurfaceFormat)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
@@ -34,6 +34,7 @@ from views.exportdialog import ExportDialog
 from models import (FLAG_NONE, FLAG_PICK, FLAG_REJECT, FileListModel,
                     FilterProxy, IdRole, SORT_DATE, SORT_NAME)
 from views.foldertree import FolderTree
+from views.helpdialog import HelpDialog
 from views.grid import FilmstripView, GridView
 from views.settingsdialog import SettingsDialog
 from views.stackpanel import StackPanel
@@ -86,6 +87,7 @@ class MainWindow(QMainWindow):
         self._fs_was_maximized = False
         self._current_folder: str | None = None
         self._pending_open_file: str | None = None  # CLI image → fullscreen
+        self._help: HelpDialog | None = None
 
         # -- models ---------------------------------------------------------
         self.model = FileListModel(self)
@@ -274,10 +276,15 @@ class MainWindow(QMainWindow):
         act_settings.triggered.connect(self._open_settings)
         tb.addAction(act_settings)
 
+        act_help = QAction("Help", self)
+        act_help.triggered.connect(self._open_help)
+        tb.addAction(act_help)
+
         self._icon_actions = [(act_open, "folder"),
                               (self._folders_action, "sidebar"),
                               (act_export, "export"),
-                              (act_settings, "settings")]
+                              (act_settings, "settings"),
+                              (act_help, "help-circle")]
 
     def _build_shortcuts(self) -> None:
         for n in range(6):
@@ -303,6 +310,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("F"), self, activated=self._toggle_fullscreen)
         QShortcut(QKeySequence(Qt.Key.Key_F11), self,
                   activated=self._toggle_fullscreen)
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=self._open_help)
+        QShortcut(QKeySequence("?"), self, activated=self._open_help)
         QShortcut(QKeySequence("Ctrl+R"), self, activated=self._force_rescan)
         QShortcut(QKeySequence(Qt.Key.Key_F5), self, activated=self._force_rescan)
         # Del = move to trash, scoped to the photo views so it can never fire
@@ -394,10 +403,26 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Default viewer", err)
 
+    def _open_help(self) -> None:
+        """Non-modal so the shortcuts stay visible while using the app."""
+        if self._help is None:
+            self._help = HelpDialog(self)
+        self._help.show()
+        self._help.raise_()
+        self._help.activateWindow()
+
+    def _restart(self) -> None:
+        """Relaunch the app in place (frozen binary or python dev run)."""
+        args = sys.argv[1:] if getattr(sys, "frozen", False) else sys.argv
+        QProcess.startDetached(sys.executable, args)
+        QApplication.instance().quit()
+
     def _open_settings(self) -> None:
+        old_scale = float(self.settings.value("ui_scale", 1.0))
         dlg = SettingsDialog(
             self,
             theme=str(self.settings.value("theme", "system")),
+            ui_scale=old_scale,
             show_hidden=self._show_hidden_setting(),
             catalog_path=self.catalog.db_path,
             on_empty_catalog=self._empty_catalog,
@@ -408,6 +433,16 @@ class MainWindow(QMainWindow):
         if dlg.exec() != SettingsDialog.DialogCode.Accepted:
             return
         v = dlg.values()
+        if abs(v["ui_scale"] - old_scale) > 0.01:
+            self.settings.setValue("ui_scale", v["ui_scale"])
+            self.settings.sync()
+            resp = QMessageBox.question(
+                self, "UI scale",
+                "The UI scale applies on the next start.\n"
+                "Restart photoflow now?")
+            if resp == QMessageBox.StandardButton.Yes:
+                self._restart()
+                return
         if v["theme"] != self.settings.value("theme", "system"):
             self.settings.setValue("theme", v["theme"])
             apply_theme(QApplication.instance(), v["theme"])
@@ -960,6 +995,13 @@ class MainWindow(QMainWindow):
 
 
 def main() -> int:
+    # UI scale must be in place before Qt starts; it multiplies the
+    # system DPI scaling (Settings → Appearance → UI scale).
+    scale = float(QSettings("photoflow", "photoflow").value("ui_scale", 1.0))
+    if abs(scale - 1.0) > 0.01:
+        os.environ["QT_SCALE_FACTOR"] = f"{scale:g}"
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     QSurfaceFormat.setDefaultFormat(default_gl_format())
     app = QApplication(sys.argv)
     app.setApplicationName("photoflow")

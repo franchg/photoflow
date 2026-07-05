@@ -194,8 +194,14 @@ class FilterProxy(QSortFilterProxyModel):
         self.filtersChanged.emit()
 
     def set_sort_key(self, key: int) -> None:
+        if key == self.sort_key:
+            return
         self.sort_key = key
+        # sort(0, Asc) alone is a no-op when the proxy is already sorted
+        # that way — Qt can't know lessThan changed meaning. invalidate()
+        # forces the re-sort with the new key.
         self.sort(0, Qt.SortOrder.AscendingOrder)
+        self.invalidate()
 
     def filterAcceptsRow(self, row: int, parent: QModelIndex) -> bool:
         m = self.sourceModel()

@@ -50,12 +50,17 @@ moving the binary is fine.
 
 Releases include `photoflow-macos-arm64.zip` — a `photoflow.app` bundle
 for Apple Silicon (all Macs since 2020), built and gate-tested by the same
-workflow. The build is **unsigned** (no Apple Developer ID), so the first
-launch needs right-click → Open, or:
+workflow. The build is **unsigned** (no Apple Developer ID), and macOS 15
+Sequoia removed the old right-click → Open bypass, so the first launch
+needs one of:
 
 ```sh
 xattr -dr com.apple.quarantine photoflow.app
 ```
+
+or the GUI route: double-click (it gets blocked), then System Settings →
+Privacy & Security → scroll down to "photoflow was blocked" → **Open
+Anyway**. Either is one-time.
 
 Running from source works too: `brew install jpeg-turbo`, then the usual
 `uv sync` / `uv run python app.py` (the Apple Silicon Homebrew lib path is
@@ -65,11 +70,14 @@ picked up automatically).
 
 **Settings…** (Ctrl+,) covers:
 
-- **Theme** — *System* (follows your platform GTK/Qt theme — the default),
-  *Light*, or *Dark*. Light/Dark are token-driven modern themes (`styles.py`:
-  one palette + QSS source of truth); System gets no stylesheet so it stays
-  native. Icons are feather-style SVGs embedded in code and tinted to the
-  active theme at runtime — no binary assets.
+- **Theme** — *System* (follows your platform GTK/Qt theme, font included —
+  the default), *Light*, or *Dark*. Light/Dark are token-driven modern
+  themes (`styles.py`: one palette + QSS source of truth) using the bundled
+  IBM Plex Sans Condensed UI font (`fonts/`, SIL OFL) at a compact 10 pt.
+  Icons are feather-style SVGs embedded in code and tinted to the active
+  theme at runtime. **UI scale** (90–150 %) scales the whole interface on
+  top of the system DPI scaling; it applies on restart (the dialog offers
+  one).
 - **Browsing** — show hidden files and folders (folder tree + folder scans).
 - **File associations** (Linux) — make photoflow the system default viewer
   for JPEG and PNG (`xdg-mime`; registers the launcher entry first, so it
@@ -100,12 +108,14 @@ picked up automatically).
 | Z / double-click (viewer) | Fit ↔ 100 %; wheel zooms, drag pans |
 | C | Interactive crop: drag box/handles, Enter applies, Esc cancels |
 | W | White-balance eyedropper: click a spot that should be neutral gray (Esc cancels) |
+| Right-click (hold) | Compare with the original: edits bypassed while held (crop stays) |
 | Ctrl+Shift+C | Copy edit stack |
 | Ctrl+Shift+V | Paste edits onto selection (replace) |
 | Ctrl+Alt+Shift+V | Paste edits onto selection (append) |
 | Ctrl+L | Apply last edit op to selection |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo edits (per image) |
 | Ctrl+E | Export… |
+| F1 / ? | Keyboard-shortcut help (also the Help toolbar button) |
 
 ## Architecture notes
 

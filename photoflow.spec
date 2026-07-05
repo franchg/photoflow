@@ -22,7 +22,8 @@ from PyInstaller.utils.hooks import collect_all
 pyexiv2_datas, pyexiv2_binaries, pyexiv2_hidden = collect_all("pyexiv2")
 
 binaries = list(pyexiv2_binaries)
-datas = list(pyexiv2_datas) + [("shaders/adjust.frag", "shaders")]
+datas = list(pyexiv2_datas) + [("shaders/adjust.frag", "shaders"),
+                               ("fonts", "fonts")]
 
 if sys.platform == "win32":
     _DEFAULT_TJ = r"C:\libjpeg-turbo64\bin\turbojpeg.dll"

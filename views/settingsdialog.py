@@ -18,12 +18,15 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog,
 
 THEME_LABELS = ["System", "Light", "Dark"]
 THEME_MODES = ["system", "light", "dark"]
+SCALE_LABELS = ["90 %", "100 %", "110 %", "125 %", "150 %"]
+SCALE_VALUES = [0.9, 1.0, 1.1, 1.25, 1.5]
 
 
 class SettingsDialog(QDialog):
     def __init__(self, parent, *, theme: str, show_hidden: bool,
-                 catalog_path: str, on_empty_catalog, on_clear_thumbs=None,
-                 on_remove_missing=None, on_set_default=None):
+                 catalog_path: str, on_empty_catalog, ui_scale: float = 1.0,
+                 on_clear_thumbs=None, on_remove_missing=None,
+                 on_set_default=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumWidth(460)
@@ -44,6 +47,22 @@ class SettingsDialog(QDialog):
         current = THEME_MODES.index(theme) if theme in THEME_MODES else 0
         self._theme_group.button(current).setChecked(True)
         form.addRow("Theme", theme_row)
+
+        self._scale_group = QButtonGroup(self)
+        self._scale_group.setExclusive(True)
+        scale_row = QHBoxLayout()
+        scale_row.setSpacing(0)
+        for i, label in enumerate(SCALE_LABELS):
+            b = QPushButton(label)
+            b.setCheckable(True)
+            b.setToolTip("Scales the whole UI on top of the system DPI "
+                         "scaling — applies on restart")
+            self._scale_group.addButton(b, i)
+            scale_row.addWidget(b)
+        nearest = min(range(len(SCALE_VALUES)),
+                      key=lambda i: abs(SCALE_VALUES[i] - ui_scale))
+        self._scale_group.button(nearest).setChecked(True)
+        form.addRow("UI scale", scale_row)
         root.addWidget(appearance)
 
         browsing = QGroupBox("Browsing")
@@ -149,6 +168,7 @@ class SettingsDialog(QDialog):
     def values(self) -> dict:
         return {
             "theme": THEME_MODES[max(0, self._theme_group.checkedId())],
+            "ui_scale": SCALE_VALUES[max(0, self._scale_group.checkedId())],
             "show_hidden": self._hidden.isChecked(),
             "catalog_path": self._path.text().strip(),
         }
