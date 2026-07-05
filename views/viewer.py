@@ -196,6 +196,19 @@ class LmapTexture:
 _NO_LMAP = np.zeros((1, 1), dtype=np.float32)  # placeholder while no image
 
 
+def _display_size_for(geo, full_w: float, full_h: float) -> tuple[float, float]:
+    """Displayed region size in full-res source pixels (rotate,
+    fine-rotation auto-crop, then crop)."""
+    w, h = full_w, full_h
+    if geo.cw_degrees % 180:
+        w, h = h, w
+    if geo.fine != 0.0:
+        k = inscribed_scale(w, h, geo.fine)
+        w, h = w * k, h * k
+    _, _, cw, ch = geo.rect
+    return max(w * cw, 1.0), max(h * ch, 1.0)
+
+
 def set_tune_uniforms(prog: QOpenGLShaderProgram, tune,
                       curve_tex: CurveTexture, lmap_tex: LmapTexture,
                       lmap: np.ndarray, vig_tex: CurveTexture,
@@ -256,6 +269,10 @@ class ViewerWidget(QOpenGLWidget):
         self._lmap_fid: int | None = None
         self._pending_image = None       # QImage waiting for upload in paintGL
         self._tex_level = -1             # workers.VIEWER_* level of the texture
+        # Outgoing frame kept on screen while the next photo decodes:
+        # (texture, tune, geo, full_w, full_h, lmap). Without it every
+        # switch flashes the bare background until the decode lands.
+        self._hold = None
 
         self._fid: int | None = None
         self._full_w = 0                 # oriented full-res dims of the source
@@ -292,6 +309,11 @@ class ViewerWidget(QOpenGLWidget):
     def show_image(self, fid: int, full_w: int, full_h: int,
                    stack: EditStack | None) -> None:
         """Switch to a new photo. Texture arrives later via set_texture_image."""
+        if self._texture is not None:
+            self._drop_hold()
+            self._hold = (self._texture, self._tune, self._geo,
+                          self._full_w, self._full_h, self._lmap)
+            self._texture = None
         self._fid = fid
         self._full_w, self._full_h = full_w, full_h
         self._pending_image = None
@@ -311,7 +333,6 @@ class ViewerWidget(QOpenGLWidget):
         self._sample_image = None
         self._lmap = _NO_LMAP
         self._lmap_fid = None
-        self._release_texture()
         self.set_stack(stack, _repaint=False)
         self._fit = True
         self.update()
@@ -649,15 +670,23 @@ class ViewerWidget(QOpenGLWidget):
         prog.release()
         self._vao.release()
 
-    def _release_texture(self) -> None:
-        if self._texture is not None:
+    def _drop_hold(self, gl_current: bool = False) -> None:
+        """Destroy the held outgoing frame's texture (if any). Pass
+        gl_current=True when the GL context is already current (paintGL) —
+        doneCurrent() there would unbind it mid-paint."""
+        if self._hold is None:
+            return
+        if gl_current:
+            self._hold[0].destroy()
+        else:
             self.makeCurrent()
-            self._texture.destroy()
+            self._hold[0].destroy()
             self.doneCurrent()
-            self._texture = None
+        self._hold = None
 
     def _release_gl(self) -> None:
         self.makeCurrent()
+        self._drop_hold(gl_current=True)
         if self._texture is not None:
             self._texture.destroy()
             self._texture = None
@@ -672,6 +701,7 @@ class ViewerWidget(QOpenGLWidget):
     def _upload_pending(self) -> None:
         img = self._pending_image
         self._pending_image = None
+        self._drop_hold(gl_current=True)  # the new photo takes over
         if self._texture is not None:
             self._texture.destroy()
         tex = QOpenGLTexture(img, QOpenGLTexture.MipMapGeneration.GenerateMipMaps)
@@ -689,16 +719,7 @@ class ViewerWidget(QOpenGLWidget):
         return uv_matrix_for(self._geo, self._full_w, self._full_h)
 
     def _display_size(self) -> tuple[float, float]:
-        """Displayed region size in full-res source pixels (rotate,
-        fine-rotation auto-crop, then crop)."""
-        w, h = self._full_w, self._full_h
-        if self._geo.cw_degrees % 180:
-            w, h = h, w
-        if self._geo.fine != 0.0:
-            k = inscribed_scale(w, h, self._geo.fine)
-            w, h = w * k, h * k
-        _, _, cw, ch = self._geo.rect
-        return max(w * cw, 1.0), max(h * ch, 1.0)
+        return _display_size_for(self._geo, self._full_w, self._full_h)
 
     def _viewport(self) -> tuple[float, float]:
         dpr = self.devicePixelRatioF()
@@ -744,36 +765,53 @@ class ViewerWidget(QOpenGLWidget):
         f.glClear(_GL_COLOR_BUFFER_BIT)
         if self._pending_image is not None:
             self._upload_pending()
-        if self._texture is None or self._program is None or not self._full_w:
+        if self._program is None:
             return
-
-        x, y, w, h = self._clamped_rect()
-        vw, vh = self._viewport()
+        held = self._hold if self._texture is None else None
+        if held is not None:
+            # The next photo is still decoding: keep the outgoing frame on
+            # screen, fit-centered (navigation resets to fit anyway), with
+            # its own geometry/tune — not the incoming photo's.
+            tex, tune, geo, fw, fh, lmap = held
+            dw, dh = _display_size_for(geo, fw, fh)
+            vw, vh = self._viewport()
+            s = min(vw / dw, vh / dh)
+            w, h = dw * s, dh * s
+            x, y = (vw - w) / 2, (vh - h) / 2
+            uv = uv_matrix_for(geo, fw, fh)
+            frame = (dw, dh)
+        elif self._texture is not None and self._full_w:
+            tex, tune, lmap = self._texture, self._effective_tune(), self._lmap
+            x, y, w, h = self._clamped_rect()
+            vw, vh = self._viewport()
+            uv = self._uv_matrix()
+            frame = self._display_size()
+        else:
+            return
 
         mvp = QMatrix4x4()
         mvp.ortho(0, vw, vh, 0, -1, 1)
         mvp.translate(x, y)
         mvp.scale(w, h)
 
-        uv = self._uv_matrix()
-
         prog = self._program
         prog.bind()
         self._vao.bind()
-        self._texture.bind(0)
+        tex.bind(0)
         prog.setUniformValue("u_mvp", mvp)
         prog.setUniformValue("u_uv", mat3_uniform(uv))
-        set_tune_uniforms(prog, self._effective_tune(), self._curve_tex,
-                          self._lmap_tex, self._lmap, self._vig_tex,
-                          self._display_size())
+        set_tune_uniforms(prog, tune, self._curve_tex,
+                          self._lmap_tex, lmap, self._vig_tex, frame)
         f.glDrawArrays(_GL_TRIANGLE_STRIP, 0, 4)
         self._vig_tex.release(3)
         self._lmap_tex.release(2)
         self._curve_tex.release(1)
-        self._texture.release(0)
+        tex.release(0)
         self._vao.release()
         prog.release()
 
+        if held is not None:
+            return  # overlays reference the incoming photo, not this frame
         if self._crop_mode:
             self._paint_crop_overlay()
         if self._vig_pick:

@@ -39,6 +39,10 @@ settings, running) live in README.md.
    Visible thumbs get priority; bulk re-renders trickle in the background.
 6. **Edits preview on GPU.** Slider drags re-render the shader on the
    already-uploaded texture. Full-res pixels are touched only at export.
+7. **No blank frames on navigation.** Switching photos in the viewer keeps
+   painting the outgoing frame (its texture + geometry/tune) until the next
+   photo's first texture is uploaded — the placeholder thumb when cached,
+   otherwise the fit decode. The background never flashes through.
 
 ## Edit model: non-destructive, composable stack
 
