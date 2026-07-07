@@ -14,7 +14,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from verify_headless import make_test_jpeg, make_test_png  # noqa: E402
+from verify_headless import (make_test_dng, make_test_jpeg,  # noqa: E402
+                             make_test_png)
 
 from PySide6.QtGui import QSurfaceFormat  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
@@ -51,7 +52,9 @@ for i in range(12):
                    capture=f"2024:07:{i + 1:02d} 10:00:00")
 make_test_png(os.path.join(folder, "png000.png"))
 make_test_png(os.path.join(folder, "png001.png"), alpha=True)
-N = 14  # 12 JPEGs + 2 PNGs, all flowing through the same pipeline
+make_test_dng(os.path.join(folder, "raw000.dng"),
+              capture="2024:07:15 10:00:00")
+N = 15  # 12 JPEGs + 2 PNGs + 1 RAW, all flowing through the same pipeline
 
 win = photoflow_app.MainWindow()
 win.resize(1280, 800)
@@ -86,13 +89,34 @@ e0 = win.model.entries()[0]
 assert (e0.width, e0.height) == (480, 640), f"oriented dims {e0.width}x{e0.height}"
 ok("oriented dimensions in model")
 
-# culling
+# culling: rating/flagging a single photo auto-advances to the next one
 win.grid.setCurrentIndex(win.proxy.index(0, 0))
 app.processEvents()
+e0 = win._current_entry()
 win._rate(4)
+app.processEvents()
+assert win.model.entry_by_id(e0.id).rating == 4
+e1 = win._current_entry()
+assert e1.id != e0.id, "rating should advance to the next photo"
 win._flag(1)
-assert win._current_entry().rating == 4 and win._current_entry().flag == 1
-ok("rate + pick")
+app.processEvents()
+assert win.model.entry_by_id(e1.id).flag == 1
+assert win.grid.selectionModel().currentIndex().row() == 2
+ok("rate + pick with auto-advance")
+
+# a multi-selection stays put (advancing would destroy it)
+win.grid.setCurrentIndex(win.proxy.index(2, 0))
+win.grid.selectionModel().select(
+    win.proxy.index(3, 0), QItemSelectionModel.SelectionFlag.Select
+    | QItemSelectionModel.SelectionFlag.Rows)
+app.processEvents()
+win._rate(2)
+app.processEvents()
+assert win.grid.selectionModel().currentIndex().row() == 2
+assert all(win.model.entries()[r].rating == 2 for r in (2, 3))
+win.grid.selectionModel().clear()
+app.processEvents()
+ok("multi-selection rating stays put")
 
 # filters
 win.proxy.set_filters(min_rating=4)

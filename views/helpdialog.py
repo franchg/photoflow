@@ -23,8 +23,8 @@ SECTIONS = (
         ("Del", "Move selection to the system trash"),
     )),
     ("Cull", (
-        ("0–5", "Rating (press again to clear)"),
-        ("P / X / U", "Pick / reject / unflag"),
+        ("0–5", "Rating, then on to the next photo (press again to clear)"),
+        ("P / X / U", "Pick / reject / unflag, then on to the next photo"),
     )),
     ("Viewer", (
         ("Z / double-click", "Fit ↔ 100 %"),

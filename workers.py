@@ -210,7 +210,7 @@ class Workers:
                      gen: int, provisional_exif: bool) -> None:
         with open(path, "rb") as f:
             data = f.read()
-        info = decode.parse_exif(data[:decode.EXIF_PREFIX_BYTES])
+        info = decode.parse_exif_data(data)
         stack = _load_stack(stack_json)
 
         try:
@@ -285,7 +285,7 @@ class Workers:
         try:
             with open(path, "rb") as f:
                 data = f.read()
-            info = decode.parse_exif(data[:decode.EXIF_PREFIX_BYTES])
+            info = decode.parse_exif_data(data)
             arr = decode.apply_orientation(
                 decode.decode_scaled(data, target_long, fast=True),
                 info.orientation)

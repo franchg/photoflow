@@ -806,15 +806,26 @@ class MainWindow(QMainWindow):
         self._update_count()
 
     def _rate(self, rating: int) -> None:
-        for e in self._selected_entries():
+        entries = self._selected_entries()
+        for e in entries:
             e_rating = rating if e.rating != rating else 0
             self.catalog.set_rating(e.id, e_rating)
             self.model.set_rating(e.id, e_rating)
+        self._cull_advance(entries)
 
     def _flag(self, flag: int) -> None:
-        for e in self._selected_entries():
+        entries = self._selected_entries()
+        for e in entries:
             self.catalog.set_flag(e.id, flag)
             self.model.set_flag(e.id, flag)
+        self._cull_advance(entries)
+
+    def _cull_advance(self, entries: list) -> None:
+        """Rating or flagging a single photo moves on to the next one —
+        culling a folder becomes one pass of keystrokes. Multi-selections
+        stay put (advancing would destroy the selection)."""
+        if len(entries) == 1:
+            self._navigate(1)
 
     # ------------------------------------------------------------- interactive crop
 

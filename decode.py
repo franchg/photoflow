@@ -1,15 +1,25 @@
 """Image decode/encode: JPEG via libjpeg-turbo (hot path, scaled DCT decode),
-PNG via Qt's codec. Format is dispatched on magic bytes right here so the
-rest of the app stays format-blind.
+PNG via Qt's codec, RAW via LibRaw (rawpy). Format is dispatched on magic
+bytes right here so the rest of the app stays format-blind.
 
 Everything here is thread-safe: TurboJPEG handles are thread-local,
 libjpeg-turbo releases the GIL, and QImage decode/scale works off the GUI
 thread. PNG has no scaled decode or embedded EXIF thumb — those stages
 degrade gracefully (full decode + smooth downscale, no provisional thumb).
 PNG alpha is flattened over white everywhere except byte-copy exports.
+
+RAW is read through its embedded camera preview wherever the preview can
+serve the request: cameras store a developed JPEG inside every RAW (most
+full-size, Sony ~1616 px), extracting it costs ~15 ms, and it is what the
+photographer saw on the camera. Requests the preview can't cover — full
+resolution when the preview is smaller than the sensor, or no preview at
+all — demosaic via LibRaw instead. Both paths return unoriented pixels
+like the JPEG path; callers apply EXIF orientation.
 """
 from __future__ import annotations
 
+import functools
+import io
 import os
 import shutil
 import struct
@@ -26,13 +36,27 @@ from turbojpeg import TJFLAG_FASTDCT, TJFLAG_FASTUPSAMPLE, TJPF_RGB, TurboJPEG
 
 JPEG_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif"}
 PNG_EXTENSIONS = {".png"}
-SCAN_EXTENSIONS = JPEG_EXTENSIONS | PNG_EXTENSIONS
+RAW_EXTENSIONS = {".dng", ".cr2", ".cr3", ".nef", ".nrw", ".arw",
+                  ".raf", ".orf", ".rw2", ".pef", ".srw"}
+SCAN_EXTENSIONS = JPEG_EXTENSIONS | PNG_EXTENSIONS | RAW_EXTENSIONS
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_TIFF_MAGICS = (b"II*\x00", b"MM\x00*")  # dng/cr2/nef/nrw/arw/pef/srw
+_RAW_MAGICS = _TIFF_MAGICS + (
+    b"IIRO", b"IIRS", b"MMOR",  # Olympus ORF variants
+    b"IIU\x00",                 # Panasonic RW2
+)
 
 
 def is_png(data: bytes) -> bool:
     return data[:8] == _PNG_MAGIC
+
+
+def is_raw(data: bytes) -> bool:
+    head = data[:16]
+    return (head[:4] in _RAW_MAGICS
+            or head[4:12] == b"ftypcrx "        # Canon CR3 (BMFF)
+            or head[:15] == b"FUJIFILMCCD-RAW")  # Fujifilm RAF
 
 # DCT-domain downscale factors supported by libjpeg-turbo, smallest first.
 SCALING_FACTORS = ((1, 8), (1, 4), (3, 8), (1, 2), (5, 8), (3, 4), (7, 8), (1, 1))
@@ -74,9 +98,14 @@ def _tj() -> TurboJPEG:
 
 
 def read_header(data: bytes) -> tuple[int, int]:
-    """(width, height) without decoding pixels."""
+    """(width, height) without decoding pixels. For RAW these are LibRaw's
+    processed dimensions — what a demosaic would produce — so zoom, fit
+    and export are sized by the sensor even when browsing rides a smaller
+    embedded preview (Sony ARW embeds only ~1616 px)."""
     if is_png(data):
         return struct.unpack(">II", data[16:24])  # IHDR is always first
+    if is_raw(data):
+        return _raw_sizes(data)
     width, height, _subsample, _colorspace = _tj().decode_header(data)
     return width, height
 
@@ -222,6 +251,105 @@ def pick_scale(src_w: int, src_h: int, target_long_edge: int) -> tuple[int, int]
     return 1, 1
 
 
+# ---------------------------------------------------------------------------
+# RAW: the embedded camera preview is the image (see module docstring).
+# ---------------------------------------------------------------------------
+
+_RAW_PREVIEW_MIN = 1024  # smaller embedded previews aren't worth showing
+
+
+class NoRawPreview(ValueError):
+    pass
+
+
+@functools.lru_cache(maxsize=2)
+def raw_preview_jpeg(data: bytes) -> bytes:
+    """The embedded camera preview as JPEG bytes. Raises NoRawPreview when
+    the file has none big enough. Cached so back-to-back decodes of the
+    same file (thumb sizes, viewer levels) extract only once (bytes
+    hashes are memoized by CPython, so repeat lookups are cheap)."""
+    import rawpy
+    try:
+        with rawpy.imread(io.BytesIO(data)) as raw:
+            thumb = raw.extract_thumb()
+    except Exception as e:
+        raise NoRawPreview(str(e)) from e
+    if thumb.format != rawpy.ThumbFormat.JPEG:
+        raise NoRawPreview("no JPEG preview embedded")
+    jpeg = bytes(thumb.data)
+    try:
+        w, h = _tj().decode_header(jpeg)[:2]
+    except Exception as e:
+        raise NoRawPreview(f"unreadable preview: {e}") from e
+    if max(w, h) < _RAW_PREVIEW_MIN:
+        raise NoRawPreview(f"preview only {w}x{h}")
+    return jpeg
+
+
+def _smooth_resize(rgb: np.ndarray, target_long_edge: int) -> np.ndarray:
+    h, w = rgb.shape[:2]
+    if max(w, h) <= target_long_edge:
+        return rgb
+    if not rgb.flags["C_CONTIGUOUS"]:
+        rgb = np.ascontiguousarray(rgb)
+    img = QImage(rgb.data, w, h, w * 3, QImage.Format.Format_RGB888)
+    if w >= h:
+        img = img.scaledToWidth(target_long_edge,
+                                Qt.TransformationMode.SmoothTransformation)
+    else:
+        img = img.scaledToHeight(target_long_edge,
+                                 Qt.TransformationMode.SmoothTransformation)
+    return qimage_to_rgb(img)
+
+
+def _raw_postprocess(data: bytes, target_long_edge: int | None) -> np.ndarray:
+    """Demosaic fallback for RAWs without a usable preview. user_flip=0
+    keeps the pixels unoriented, matching every other decode path."""
+    import rawpy
+    with rawpy.imread(io.BytesIO(data)) as raw:
+        s = raw.sizes
+        half = (target_long_edge is not None
+                and target_long_edge * 2 <= max(s.width, s.height))
+        rgb = raw.postprocess(use_camera_wb=True, user_flip=0,
+                              half_size=half, output_bps=8)
+    if target_long_edge is not None:
+        rgb = _smooth_resize(rgb, target_long_edge)
+    return np.ascontiguousarray(rgb)
+
+
+@functools.lru_cache(maxsize=4)
+def _raw_sizes(data: bytes) -> tuple[int, int]:
+    import rawpy
+    with rawpy.imread(io.BytesIO(data)) as raw:
+        return raw.sizes.width, raw.sizes.height
+
+
+def _decode_raw(data: bytes, target_long_edge: int | None) -> np.ndarray | bytes:
+    """RAW dispatch: the embedded preview serves every request it can
+    cover (that is what makes RAW browsing JPEG-fast), the demosaic
+    serves the rest — full-size views and exports of files whose preview
+    is smaller than the sensor, like Sony ARW. Returns preview JPEG
+    bytes (ride the JPEG path) or a demosaiced array."""
+    try:
+        jpeg = raw_preview_jpeg(data)
+    except NoRawPreview:
+        return _raw_postprocess(data, target_long_edge)
+    plong = max(_tj().decode_header(jpeg)[:2])
+    if target_long_edge is not None and plong >= target_long_edge:
+        return jpeg
+    if plong >= 0.98 * max(_raw_sizes(data)):  # preview IS full resolution
+        return jpeg
+    return _raw_postprocess(data, target_long_edge)
+
+
+def _raw_flip_orientation(data: bytes) -> int:
+    """LibRaw's flip (dcraw convention) as an EXIF orientation — the
+    fallback for containers the TIFF walker can't read (CR3, RAF)."""
+    import rawpy
+    with rawpy.imread(io.BytesIO(data)) as raw:
+        return {0: 1, 3: 3, 5: 8, 6: 6}.get(raw.sizes.flip, 1)
+
+
 def decode_scaled(data: bytes, target_long_edge: int | None = None,
                   fast: bool = True) -> np.ndarray:
     """Decode to RGB uint8, never producing more pixels than needed.
@@ -229,9 +357,16 @@ def decode_scaled(data: bytes, target_long_edge: int | None = None,
     target_long_edge=None decodes full resolution. `fast` trades a little
     accuracy for speed (thumbnails); export passes fast=False. PNG input is
     dispatched to Qt's codec (no scaled decode there; `fast` is ignored).
+    RAW input unwraps to its embedded preview and rides the JPEG path;
+    previewless files demosaic instead.
     """
     if is_png(data):
         return _decode_png(data, target_long_edge)
+    if is_raw(data):
+        result = _decode_raw(data, target_long_edge)
+        if isinstance(result, np.ndarray):
+            return result
+        data = result  # the preview JPEG rides the normal path below
     tj = _tj()
     if target_long_edge is None:
         sf = (1, 1)
@@ -318,6 +453,19 @@ def parse_exif(prefix: bytes) -> ExifInfo:
         return ExifInfo()
 
 
+def parse_exif_data(data: bytes) -> ExifInfo:
+    """parse_exif over full file bytes, with a LibRaw orientation fallback
+    for the RAW containers the TIFF walker can't read (CR3, RAF)."""
+    info = parse_exif(data[:EXIF_PREFIX_BYTES])
+    if (info == ExifInfo() and is_raw(data)
+            and data[:2] not in (b"II", b"MM")):
+        try:
+            return ExifInfo(_raw_flip_orientation(data), None, None)
+        except Exception:
+            pass
+    return info
+
+
 def _find_app1(prefix: bytes) -> bytes | None:
     if prefix[:2] != b"\xff\xd8":
         return None
@@ -340,7 +488,12 @@ def _find_app1(prefix: bytes) -> bytes | None:
 
 
 def _parse_exif(prefix: bytes) -> ExifInfo:
-    tiff = _find_app1(prefix)
+    # TIFF-based RAW containers are TIFF from byte zero; JPEG carries the
+    # same structure inside APP1.
+    if prefix[:2] in (b"II", b"MM"):
+        tiff = prefix
+    else:
+        tiff = _find_app1(prefix)
     if not tiff or tiff[:2] not in (b"II", b"MM"):
         return ExifInfo()
     fmt = "<" if tiff[:2] == b"II" else ">"
@@ -402,7 +555,8 @@ def _parse_exif(prefix: bytes) -> ExifInfo:
             toff, tlen = short_value(ifd1[0x0201]), short_value(ifd1[0x0202])
             if toff and tlen:
                 candidate = tiff[toff:toff + tlen]
-                if candidate[:2] == b"\xff\xd8":
+                # length check: RAW prefixes may truncate the slice
+                if len(candidate) == tlen and candidate[:2] == b"\xff\xd8":
                     thumb = bytes(candidate)
 
     return ExifInfo(orientation, capture_dt, thumb)

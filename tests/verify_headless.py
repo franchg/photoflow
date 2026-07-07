@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import sys
 import tempfile
 import time
@@ -70,6 +71,79 @@ def make_test_png(path: str, w: int = 320, h: int = 240,
         with open(path, "wb") as f:
             f.write(decode.encode_png(rgb))
     return rgb
+
+
+def make_test_dng(path: str, w: int = 512, h: int = 384,
+                  orientation: int = 1,
+                  capture: str | None = None) -> None:
+    """Minimal uncompressed CFA (RGGB) DNG that LibRaw demosaics — the
+    hermetic stand-in for a camera RAW. No embedded preview on purpose:
+    it exercises the postprocess fallback. Left half dark, right half
+    bright, so orientation is observable after decode."""
+    cfa = np.zeros((h, w), dtype="<u2")
+    cfa[:, : w // 2] = 8000
+    cfa[:, w // 2:] = 60000
+    strip = cfa.tobytes()
+
+    cm = b"".join(struct.pack("<ii", v, 10000)          # ColorMatrix1 = I
+                  for v in (10000, 0, 0, 0, 10000, 0, 0, 0, 10000))
+    asn = struct.pack("<II", 1, 1) * 3                  # AsShotNeutral 1,1,1
+    dt = (capture.encode("ascii") + b"\x00") if capture else b""
+
+    # fixed layout: header, IFD0, optional Exif IFD, deferred values, strip
+    n0 = 17 + (1 if capture else 0)
+    ifd0_off = 8
+    exif_off = ifd0_off + 2 + n0 * 12 + 4
+    exif_size = (2 + 1 * 12 + 4) if capture else 0
+    cm_off = exif_off + exif_size
+    asn_off = cm_off + len(cm)
+    dt_off = asn_off + len(asn)
+    strip_off = dt_off + len(dt) + (len(dt) % 2)
+
+    def entry(tag: int, typ: int, count: int, field: bytes) -> bytes:
+        return struct.pack("<HHI", tag, typ, count) + field.ljust(4, b"\x00")
+
+    def long_(v: int) -> bytes:
+        return struct.pack("<I", v)
+
+    def short(v: int) -> bytes:
+        return struct.pack("<H", v)
+
+    ents = [
+        entry(254, 4, 1, long_(0)),                     # NewSubfileType
+        entry(256, 4, 1, long_(w)),                     # ImageWidth
+        entry(257, 4, 1, long_(h)),                     # ImageLength
+        entry(258, 3, 1, short(16)),                    # BitsPerSample
+        entry(259, 3, 1, short(1)),                     # Compression: none
+        entry(262, 3, 1, short(32803)),                 # Photometric: CFA
+        entry(273, 4, 1, long_(strip_off)),             # StripOffsets
+        entry(274, 3, 1, short(orientation)),           # Orientation
+        entry(277, 3, 1, short(1)),                     # SamplesPerPixel
+        entry(278, 4, 1, long_(h)),                     # RowsPerStrip
+        entry(279, 4, 1, long_(len(strip))),            # StripByteCounts
+        entry(33421, 3, 2, struct.pack("<HH", 2, 2)),   # CFARepeatPatternDim
+        entry(33422, 1, 4, b"\x00\x01\x01\x02"),        # CFAPattern RGGB
+        entry(50706, 1, 4, b"\x01\x04\x00\x00"),        # DNGVersion 1.4
+        entry(50717, 4, 1, long_(65535)),               # WhiteLevel
+        entry(50721, 10, 9, long_(cm_off)),             # ColorMatrix1
+        entry(50728, 5, 3, long_(asn_off)),             # AsShotNeutral
+    ]
+    if capture:
+        ents.append(entry(34665, 4, 1, long_(exif_off)))  # Exif IFD pointer
+    ents.sort(key=lambda e: struct.unpack_from("<H", e)[0])
+    assert len(ents) == n0
+
+    with open(path, "wb") as f:
+        f.write(b"II*\x00" + struct.pack("<I", ifd0_off))
+        f.write(struct.pack("<H", n0) + b"".join(ents) + long_(0))
+        if capture:
+            f.write(struct.pack("<H", 1)
+                    + entry(0x9003, 2, len(dt), long_(dt_off))
+                    + long_(0))
+        f.write(cm)
+        f.write(asn)
+        f.write(dt + b"\x00" * (len(dt) % 2))
+        f.write(strip)
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -572,6 +646,59 @@ def main() -> None:
                      ExportOptions(dest, resize_long=160))
     check("png resize export", decode.read_header(
         open(out, "rb").read()) == (160, 120))
+
+    # ---- RAW (synthetic CFA DNG, demosaic fallback path) --------------------
+    check("raw extensions scanned", ".dng" in decode.SCAN_EXTENSIONS
+          and ".nef" in decode.SCAN_EXTENSIONS)
+    dng = os.path.join(tmp, "shot.dng")
+    make_test_dng(dng, capture="2024:07:01 10:00:00")
+    rdata = open(dng, "rb").read()
+    check("raw magic detected", decode.is_raw(rdata)
+          and not decode.is_raw(open(png, "rb").read()))
+    rinfo = decode.parse_exif_data(rdata)
+    check("raw exif from tiff header", rinfo.orientation == 1
+          and rinfo.capture_dt == "2024-07-01 10:00:00")
+    check("raw header dims", decode.read_header(rdata) == (512, 384))
+    rarr = decode.decode_scaled(rdata, 256)
+    check("raw demosaic decode", rarr.shape == (192, 256, 3))
+    check("raw content orientation-observable",
+          float(rarr[:, :96].mean()) < 128 < float(rarr[:, -96:].mean()),
+          f"{rarr[:, :96].mean():.0f} / {rarr[:, -96:].mean():.0f}")
+
+    dng6 = os.path.join(tmp, "shot6.dng")
+    make_test_dng(dng6, orientation=6)
+    r6 = open(dng6, "rb").read()
+    info6 = decode.parse_exif_data(r6)
+    arr6 = decode.apply_orientation(decode.decode_scaled(r6, 256),
+                                    info6.orientation)
+    check("raw orientation bakes", info6.orientation == 6
+          and arr6.shape == (256, 192, 3)
+          and float(arr6[:48].mean()) < 128 < float(arr6[-48:].mean()))
+
+    # unedited RAW exports as a byte copy of the original
+    out = export_one(ExportItem(1, dng, None), ExportOptions(dest))
+    check("raw export untouched = byte copy",
+          out.endswith(".dng") and open(out, "rb").read() == rdata)
+    # edited RAW develops to JPEG from the same pixels the app shows
+    out = export_one(ExportItem(1, dng, tune_stack.to_json()),
+                     ExportOptions(dest))
+    odata = open(out, "rb").read()
+    check("raw edited export is jpeg", out.endswith(".jpg")
+          and odata[:2] == b"\xff\xd8")
+    want = render.render_stack(decode.decode_scaled(rdata, None, fast=False),
+                               tune_stack)
+    got = decode.decode_scaled(odata)
+    mad = float(np.mean(np.abs(got.astype(np.int16) - want.astype(np.int16))))
+    check("raw edited export matches preview math", mad < 3.0, f"mad={mad}")
+    # rotation-only stack must not attempt jpegtran on a RAW container
+    out = export_one(ExportItem(1, dng, rot_only.to_json()), ExportOptions(dest))
+    odata = open(out, "rb").read()
+    check("raw rotate export via pixel path", out.endswith(".jpg")
+          and decode.read_header(odata) == (384, 512))
+    out = export_one(ExportItem(1, dng, None),
+                     ExportOptions(dest, resize_long=128))
+    check("raw resize export", out.endswith(".jpg") and decode.read_header(
+        open(out, "rb").read()) == (128, 96))
 
     print(f"\nALL PASS  (workdir {tmp})")
 

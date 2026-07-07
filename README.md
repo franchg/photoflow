@@ -3,7 +3,7 @@
 </p>
 <h1 align="center">photoflow</h1>
 <p align="center">
-  Fast photo browsing, culling and non-destructive editing for JPEG and PNG.
+  Fast photo browsing, culling and non-destructive editing for JPEG, PNG and camera RAW.
 </p>
 <p align="center">
   <a href="https://github.com/franchg/photoflow/releases/latest/download/photoflow-linux-x64.tar.gz"><img src="https://img.shields.io/badge/Linux-Download-5b8def?style=for-the-badge" alt="Download for Linux (x64)"></a>
@@ -30,8 +30,15 @@ no albums, no face recognition, no cloud.
 
 A few limitations you should know about before starting:
 
-- It reads JPEG and PNG only. There is no support for RAW, HEIC, WebP,
-  TIFF or video.
+- It reads JPEG, PNG and the common camera RAW formats (DNG and the
+  Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax families).
+  There is no support for HEIC, WebP, TIFF or video.
+- RAW files browse through the JPEG preview the camera embeds, the same
+  image you saw on the camera display, so flipping through them is as
+  fast as JPEG. Zooming in and exporting use the full sensor resolution,
+  developed with the camera's settings. You can cull, edit and export
+  them as JPEG, but this is not a RAW developer: there is no recovering
+  blown highlights or pushing exposure on the sensor data.
 - Edits are global, they apply to the whole image. There are no local
   adjustments, no healing brush, no manual curves.
 - Ratings, flags and edits are stored in photoflow's own catalog, not
@@ -131,8 +138,10 @@ contents changed on disk.
 ### Cull
 
 Culling works best from the keyboard: 0–5 rates the selected photo, P
-picks it, X rejects it, U removes the flag. Ratings show as stars on the
-thumbnail, picks get a green edge and rejects a red one. With the toolbar
+picks it, X rejects it, U removes the flag, and photoflow then moves on
+to the next photo by itself, so going through a folder becomes a single
+pass of keystrokes. Ratings show as stars on the thumbnail, picks get a
+green edge and rejects a red one. With the toolbar
 filters you can then narrow the grid to a minimum rating, a flag state,
 or edited photos only, so "show me the four-star picks" takes two clicks.
 Del moves photos to the system trash, asking for confirmation when more
@@ -182,7 +191,8 @@ Ctrl+E exports the selection. You choose a destination, a file-name
 pattern (with tokens for the original name, the capture date and a
 counter), the JPEG quality and an optional resize. PNGs stay PNG,
 unedited photos are copied exactly as they are, and EXIF metadata is
-preserved.
+preserved. RAW files are copied untouched when they have no edits, so
+the keepers keep their originals, and develop to JPEG when they do.
 
 ### Settings
 
@@ -206,8 +216,8 @@ Press F1 or ? in the app for this list.
 | F / F11 | Fullscreen in and out |
 | Del | Move the selection to the system trash |
 | **Cull** | |
-| 0–5 | Rating (press again to clear) |
-| P / X / U | Pick / reject / unflag |
+| 0–5 | Rating, then on to the next photo (press again to clear) |
+| P / X / U | Pick / reject / unflag, then on to the next photo |
 | **Viewer** | |
 | Z / double-click | Fit or 100% (wheel zooms, drag pans) |
 | C | Interactive crop (Enter applies, Esc cancels) |

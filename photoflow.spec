@@ -20,11 +20,13 @@ import sys
 from PyInstaller.utils.hooks import collect_all
 
 pyexiv2_datas, pyexiv2_binaries, pyexiv2_hidden = collect_all("pyexiv2")
+rawpy_datas, rawpy_binaries, rawpy_hidden = collect_all("rawpy")
 
-binaries = list(pyexiv2_binaries)
-datas = list(pyexiv2_datas) + [("shaders/adjust.frag", "shaders"),
-                               ("fonts", "fonts"),
-                               ("pyproject.toml", ".")]  # version.py reads it
+binaries = list(pyexiv2_binaries) + list(rawpy_binaries)
+datas = (list(pyexiv2_datas) + list(rawpy_datas)
+         + [("shaders/adjust.frag", "shaders"),
+            ("fonts", "fonts"),
+            ("pyproject.toml", ".")])  # version.py reads it
 
 if sys.platform == "win32":
     _DEFAULT_TJ = r"C:\libjpeg-turbo64\bin\turbojpeg.dll"
@@ -43,7 +45,7 @@ a = Analysis(
     ["app.py"],
     binaries=binaries,
     datas=datas,
-    hiddenimports=pyexiv2_hidden,
+    hiddenimports=pyexiv2_hidden + rawpy_hidden,
     excludes=["tkinter"],
 )
 

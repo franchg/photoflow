@@ -69,6 +69,10 @@ jobs:
             "dist/photoflow/_internal/shaders/adjust.frag",
             "dist/photoflow/_internal/pyproject.toml"
           )
+          if (!(Get-ChildItem -Recurse dist/photoflow/_internal |
+                Where-Object Name -match 'libraw|_rawpy')) {
+            throw "bundle is missing libraw/rawpy"
+          }
           foreach ($f in $need) {
             if (!(Test-Path $f)) { throw "bundle is missing $f" }
           }
@@ -130,7 +134,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           uv run pyi-archive_viewer --list --brief dist/photoflow > contents.txt
-          for need in libturbojpeg.so jpegtran shaders/adjust.frag exiv2api pyproject.toml; do
+          for need in libturbojpeg.so jpegtran shaders/adjust.frag exiv2api pyproject.toml libraw; do
             grep -q "$need" contents.txt || { echo "bundle is missing $need"; exit 1; }
           done
           # system graphics stack must NOT be bundled (breaks EGL/gio on
@@ -202,6 +206,7 @@ jobs:
           test -e dist/photoflow.app/Contents/Frameworks/libturbojpeg.dylib
           test -e dist/photoflow.app/Contents/Frameworks/shaders/adjust.frag
           test -e dist/photoflow.app/Contents/Frameworks/pyproject.toml
+          find dist/photoflow.app -name '*libraw*' -o -name '_rawpy*' | grep -q . || { echo 'missing libraw/rawpy'; exit 1; }
           # macOS has no `timeout`: still alive after 10 s == it started
           ./dist/photoflow.app/Contents/MacOS/photoflow & pid=$!
           sleep 10

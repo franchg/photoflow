@@ -144,26 +144,38 @@ def export_one(item: ExportItem, opts: ExportOptions) -> str:
     geo = stack.geometry()
     tune = render.TuneUniforms(stack.folded_tune(), stack.vignette())
     has_edits = stack.has_edits()
-    src_ext = os.path.splitext(item.path)[1].lower() or ".jpg"
-    out_path = _unique_dest(opts.dest_dir,
-                            render_name(opts.name_pattern, item) + src_ext)
 
     with open(item.path, "rb") as f:
         data = f.read()
     src_is_png = decode.is_png(data)
-    orientation = decode.parse_exif(data[:decode.EXIF_PREFIX_BYTES]).orientation
+    src_is_raw = decode.is_raw(data)
+    # A RAW that needs pixels rendered develops to JPEG; anything else
+    # stays in its source format.
+    src_ext = os.path.splitext(item.path)[1].lower() or ".jpg"
+    if src_is_raw and (has_edits or opts.resize_long is not None):
+        src_ext = ".jpg"
+    out_path = _unique_dest(opts.dest_dir,
+                            render_name(opts.name_pattern, item) + src_ext)
+    orientation = decode.parse_exif_data(data).orientation
     # Exports are ALWAYS sRGB: sources tagged with another profile must go
     # through decode→convert→re-encode, never the byte-preserving paths.
     bytes_are_srgb = not decode.needs_srgb_conversion(data)
 
+    # Untouched RAW: copy the keeper as-is, metadata and all — there is
+    # nothing to render, and the original is worth more than any re-encode.
+    if src_is_raw and not has_edits and opts.resize_long is None:
+        shutil.copyfile(item.path, out_path)
+        return out_path
+
     # Byte copy (also the only path that preserves PNG alpha).
     if (not has_edits and opts.resize_long is None and orientation == 1
-            and bytes_are_srgb):
+            and bytes_are_srgb and not src_is_raw):
         shutil.copyfile(item.path, out_path)
         return out_path
 
     # Lossless path (JPEG only): net effect is a pure 90°-multiple rotation.
-    if (bytes_are_srgb and not src_is_png and opts.resize_long is None
+    if (bytes_are_srgb and not src_is_png and not src_is_raw
+            and opts.resize_long is None
             and stack.only_rotations() and geo.fine == 0.0
             and orientation in decode.ORIENTATION_TO_CW_DEGREES):
         total = (decode.ORIENTATION_TO_CW_DEGREES[orientation]

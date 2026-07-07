@@ -18,8 +18,9 @@ settings, running) live in README.md.
 - **UI**: PySide6 (Qt 6). QWidgets: `QListView` IconMode grid,
   `QOpenGLWidget` viewer (GL 3.3 core), `QFileSystemModel` folder tree.
 - **Decode/encode**: libjpeg-turbo via `PyTurboJPEG` (pinned `<2`: 2.x needs
-  libjpeg-turbo 3 at runtime). PNG via Qt's codec, dispatched on magic bytes
-  in `decode.py` so the rest of the app is format-blind.
+  libjpeg-turbo 3 at runtime). PNG via Qt's codec, RAW via LibRaw
+  (`rawpy`) — all dispatched on magic bytes in `decode.py` so the rest of
+  the app is format-blind.
 - **Metadata**: `pyexiv2` for EXIF copy on export; a hand-rolled APP1/TIFF
   parser in `decode.py` for the hot read path (orientation, capture date,
   embedded thumb).
@@ -46,6 +47,37 @@ settings, running) live in README.md.
    painting the outgoing frame (its texture + geometry/tune) until the next
    photo's first texture is uploaded — the placeholder thumb when cached,
    otherwise the fit decode. The background never flashes through.
+
+## RAW: the preview serves what it can, the demosaic serves the rest
+
+Cameras store a developed JPEG inside every RAW; LibRaw (rawpy) extracts
+it in ~15 ms. `decode.py` dispatches each request (`_decode_raw`): the
+preview serves any decode it can cover — which makes RAW browsing cost
+the same as JPEG browsing, riding the TurboJPEG path — and a LibRaw
+demosaic (`use_camera_wb`, `user_flip=0` so pixels stay unoriented like
+every other decode path, `half_size` when the target allows) serves what
+it can't: full resolution when the preview is smaller than the sensor,
+previews under 1024 px, or no preview at all. Most makers embed
+full-size previews so everything is preview-fast; Sony ARW embeds only
+~1616 px, so its thumbs ride the preview while fit views, 100 % zoom and
+exports demosaic the real 24 MP. `read_header` reports LibRaw's
+processed dimensions — the demosaic-capable size — so fit/zoom/export
+are sized by the sensor regardless of which path renders.
+
+EXIF comes from the same hand-rolled TIFF walker — TIFF-based containers
+(DNG/CR2/NEF/ARW/PEF/SRW/ORF/RW2) are TIFF from byte zero, so
+`_parse_exif` accepts a bare TIFF prefix; CR3/RAF fall back to LibRaw's
+flip for orientation (`parse_exif_data`). Export policy: an untouched
+RAW byte-copies with its original extension (the keeper flow); anything
+that needs pixels (edits, resize) develops to a JPEG; the jpegtran and
+PNG paths never see RAW.
+
+Deliberately NOT a RAW developer: no linear 16-bit pipeline, highlight
+recovery, or exposure on sensor data. The tune math is calibrated in
+display-space sRGB (below) and a RAW development pipeline is a different
+app. Known trade-off: the camera preview and the LibRaw demosaic differ
+slightly in tone (camera picture styles), so a Sony thumb can look
+subtly different from its fit view.
 
 ## Edit model: non-destructive, composable stack
 
@@ -246,8 +278,8 @@ photoflow/
   desktopintegration.py  # .desktop + icon registration, xdg default viewer
   catalog.py          # SQLite writer thread, schema, maintenance ops
   workers.py          # pools: scan, thumbs (visible-first), bulk, viewer
-  decode.py           # TurboJPEG + PNG dispatch, EXIF parse, jpegtran,
-                      # frozen-bundle lib resolution
+  decode.py           # TurboJPEG + PNG + RAW-preview dispatch, EXIF parse,
+                      # jpegtran, frozen-bundle lib resolution
   editstack.py        # ops, validation, folding, clipboard, history
   render.py           # stack→math (GLSL uniforms + numpy mirror), WB solve
   models.py           # grid list model + filter/sort proxy
@@ -282,7 +314,9 @@ UI thread never blocks on I/O or pixels; paste-on-500 stays responsive.
 
 ## Deliberately not built (revisit on demand)
 
-- RAW or formats beyond JPEG/PNG.
+- Formats beyond JPEG/PNG/RAW (HEIC, WebP, TIFF, video). RAW itself is
+  read through its embedded preview (see "RAW: the preview is the
+  image"); linear RAW *development* is the part that stays unbuilt.
 - Monitor-profile color management (wide-gamut display mapping) — input
   profiles *are* handled (converted to sRGB at decode); the output side is
   left to the compositor, which Wayland is increasingly taking over.
