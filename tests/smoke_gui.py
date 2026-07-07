@@ -502,9 +502,10 @@ ok("grid size selector: S/M/L applied + persisted")
 from views.settingsdialog import SettingsDialog  # noqa: E402
 
 dlg = SettingsDialog(win, theme="dark", show_hidden=True, ui_scale=1.25,
+                     pair_raw=False,
                      catalog_path="/tmp/x.db", on_empty_catalog=lambda: None)
 assert dlg.values() == {"theme": "dark", "ui_scale": 1.25, "show_hidden": True,
-                        "catalog_path": "/tmp/x.db"}
+                        "pair_raw": False, "catalog_path": "/tmp/x.db"}
 dlg.deleteLater()
 ok("settings dialog: fields round-trip (incl. UI scale)")
 
@@ -689,6 +690,82 @@ _btn = _dlg.findChild(QDialogButtonBox).button(
 assert _btn.text() == "Export 3 photos", _btn.text()
 _dlg.deleteLater()
 ok("export offers exactly the selection; dialog button shows the count")
+
+# compare view: two synced panes, focused-pane culling, B toggles
+from PySide6.QtCore import QPointF  # noqa: E402
+
+win.grid.selectionModel().clear()
+win.grid.setCurrentIndex(win.proxy.index(0, 0))
+app.processEvents()
+win._toggle_compare()  # one photo selected: refused with a hint
+assert win.stacked.currentIndex() == photoflow_app.PAGE_GRID
+win.grid.selectionModel().select(
+    win.proxy.index(1, 0), QItemSelectionModel.SelectionFlag.Select
+    | QItemSelectionModel.SelectionFlag.Rows)
+app.processEvents()
+win._toggle_compare()
+assert win.stacked.currentIndex() == photoflow_app.PAGE_COMPARE
+assert len(win._compare_entries) == 2
+ce0, ce1 = win._compare_entries
+win._set_compare_focus(1)
+win._rate(5)
+app.processEvents()
+assert win.model.entry_by_id(ce1.id).rating == 5
+assert win.model.entry_by_id(ce0.id).rating != 5
+assert win.stacked.currentIndex() == photoflow_app.PAGE_COMPARE  # no advance
+win._compare_panes[0]._set_scale(2.0, QPointF(0, 0))
+fit1, scale1, _pan1 = win._compare_panes[1].view_state()
+assert not fit1 and abs(scale1 - 2.0) < 1e-9, (fit1, scale1)
+win._exit_compare()
+assert win.stacked.currentIndex() == photoflow_app.PAGE_GRID
+ok("compare view: focus culling + synced zoom, B/Esc in and out")
+
+# RAW+JPEG pairing: one photo in the grid, mirrored culling, paired trash
+pair_dir = tempfile.mkdtemp(prefix="photoflow-smoke-pair-")
+make_test_jpeg(os.path.join(pair_dir, "shot001.jpg"))
+make_test_dng(os.path.join(pair_dir, "shot001.dng"))
+make_test_jpeg(os.path.join(pair_dir, "loner.jpg"))
+
+win.settings.setValue("pair_raw", False)
+win._scan(pair_dir)
+pump(lambda: win.model.rowCount() == 3, what="unpaired scan")
+win.settings.setValue("pair_raw", True)
+win._scan(pair_dir)
+pump(lambda: win.model.rowCount() == 2, what="paired scan")
+paired = next(e for e in win.model.entries() if e.name == "shot001.jpg")
+dng_path = os.path.join(pair_dir, "shot001.dng")
+assert paired.raw_twin_id is not None and paired.raw_twin_path == dng_path
+from models import RawRole  # noqa: E402
+row = next(r for r in range(win.proxy.rowCount())
+           if win.proxy.index(r, 0).data() == "shot001.jpg")
+assert win.proxy.index(row, 0).data(RawRole) is True
+win.grid.setCurrentIndex(win.proxy.index(row, 0))
+app.processEvents()
+win._rate(3)
+pump(lambda: win.catalog._read_conn().execute(
+    "SELECT rating FROM files WHERE id=?",
+    (paired.raw_twin_id,)).fetchone()[0] == 3, what="mirrored rating")
+win.grid.setCurrentIndex(win.proxy.index(row, 0))
+app.processEvents()
+win._delete_selected()
+pump(lambda: not os.path.exists(paired.path)
+     and not os.path.exists(dng_path), what="paired trash")
+pump(lambda: win.catalog._read_conn().execute(
+    "SELECT COUNT(*) FROM files WHERE id IN (?, ?)",
+    (paired.id, paired.raw_twin_id)).fetchone()[0] == 0,
+    what="paired catalog rows removed")
+assert win.model.rowCount() == 1
+ok("raw+jpeg pairing: one photo, RAW chip, mirrored rating, paired trash")
+
+# single instance: a second launch forwards its path to the running window
+sock_name = "photoflow-smoke-instance"
+assert not photoflow_app.forward_to_running(folder, sock_name)
+server = photoflow_app.serve_single_instance(win, sock_name)
+assert server is not None
+assert photoflow_app.forward_to_running(folder, sock_name)
+pump(lambda: win._current_folder == folder, what="forwarded open")
+server.close()
+ok("single instance: second launch forwarded to the running window")
 
 win.close()
 app.processEvents()

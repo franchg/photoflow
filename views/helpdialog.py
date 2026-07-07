@@ -25,6 +25,8 @@ SECTIONS = (
     ("Cull", (
         ("0–5", "Rating, then on to the next photo (press again to clear)"),
         ("P / X / U", "Pick / reject / unflag, then on to the next photo"),
+        ("B", "Compare two selected photos side by side — click a side to "
+              "focus it, rate/flag applies there; Esc leaves"),
     )),
     ("Viewer", (
         ("Z / double-click", "Fit ↔ 100 %"),

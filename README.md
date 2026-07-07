@@ -52,8 +52,7 @@ A few limitations you should know about before starting:
 - The macOS build runs on Apple Silicon only and is unsigned, so the
   first launch needs a one-time approval, described below. On Windows,
   making photoflow the default viewer is one "Open with → Always" click,
-  since Windows insists on asking you. Opening a second image from the
-  file manager starts a second window.
+  since Windows insists on asking you.
 
 ## Install
 
@@ -143,6 +142,8 @@ uv run python app.py [folder | image]
 A folder argument opens it in the grid, an image argument opens its
 folder with that image fullscreen, which is exactly what double-clicking
 an image in your file manager does once photoflow is the default viewer.
+If photoflow is already running, a second launch hands its file to the
+open window instead of starting another copy.
 
 ## User guide
 
@@ -166,6 +167,17 @@ filters you can then narrow the grid to a minimum rating, a flag state,
 or edited photos only, so "show me the four-star picks" takes two clicks.
 Del moves photos to the system trash, asking for confirmation when more
 than one is selected.
+
+For choosing between two similar shots, select them both and press B:
+they appear side by side with zoom and pan kept in sync, you click a
+side to focus it, rating and flag keys apply to that photo, and Esc
+goes back to the grid.
+
+If you shoot RAW+JPEG, the pair shows as a single photo carrying a
+small RAW chip on its thumbnail: the JPEG is what you see and edit,
+while ratings, flags and the trash always apply to both files
+together. You can turn the pairing off in the settings if you prefer
+to see the two files separately.
 
 ### View
 
@@ -238,6 +250,7 @@ Press F1 or ? in the app for this list.
 | **Cull** | |
 | 0–5 | Rating, then on to the next photo (press again to clear) |
 | P / X / U | Pick / reject / unflag, then on to the next photo |
+| B | Compare two selected photos side by side (Esc leaves) |
 | **Viewer** | |
 | Z / double-click | Fit or 100% (wheel zooms, drag pans) |
 | C | Interactive crop (Enter applies, Esc cancels) |

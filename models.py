@@ -21,6 +21,7 @@ EditedRole = Qt.ItemDataRole.UserRole + 5
 CaptureDtRole = Qt.ItemDataRole.UserRole + 6
 ThumbRole = Qt.ItemDataRole.UserRole + 7
 NameRole = Qt.ItemDataRole.UserRole + 8
+RawRole = Qt.ItemDataRole.UserRole + 9   # RAW file, or a RAW rides behind it
 
 FLAG_NONE, FLAG_PICK, FLAG_REJECT = 0, 1, -1
 
@@ -41,6 +42,9 @@ class FileEntry:
     stack_json: str | None = None
     has_edits: bool = False
     has_thumb_cache: bool = False      # catalog has a valid small blob
+    is_raw: bool = False               # the file itself is a camera RAW
+    raw_twin_id: int | None = None     # paired same-stem RAW behind a JPEG
+    raw_twin_path: str | None = None
     thumb: QImage = field(default=None, repr=False)
     thumb_requested: bool = False
 
@@ -108,6 +112,8 @@ class FileListModel(QAbstractListModel):
             return e.flag
         if role == EditedRole:
             return e.has_edits
+        if role == RawRole:
+            return e.is_raw or e.raw_twin_id is not None
         if role == CaptureDtRole:
             # Fall back to mtime so date sort is total before EXIF arrives.
             return e.capture_dt or f"~{e.mtime:017.6f}"

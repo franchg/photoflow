@@ -79,6 +79,14 @@ app. Known trade-off: the camera preview and the LibRaw demosaic differ
 slightly in tone (camera picture styles), so a Sony thumb can look
 subtly different from its fit view.
 
+**RAW+JPEG pairing** (`workers._pair_raw_jpeg`, Settings toggle,
+default on): same-stem RAW+JPEG collapse at scan time into the JPEG
+entry, which carries `raw_twin_id/path`. The JPEG displays and edits;
+rating/flag writes mirror to the twin's catalog row and trash moves
+both files. Conservative rule: only exact one-JPEG-one-RAW stems pair
+(a third same-stem file keeps the group separate). Both grid and
+filmstrip draw a RAW chip on RAW files and on paired JPEGs (RawRole).
+
 ## Edit model: non-destructive, composable stack
 
 Edits never touch source files. Each image has an ordered edit stack
@@ -211,6 +219,13 @@ workers (thread pools)               catalog (SQLite WAL)          UI (Qt main t
         └──── queued Qt signals; generation counter kills stale work ────┘
 ```
 
+The compare view (B on a two-photo selection) is a third stacked page
+with two extra `ViewerWidget`s: zoom/pan mirror through
+`view_changed`/`apply_view_state` with a re-entry guard, a click focuses
+a pane (accent border), and rating/flag keys target the focused photo
+(`_cull_targets`) with auto-advance suspended. Edit/crop/pick/trash
+actions are guarded off while comparing.
+
 ### Catalog schema
 
 ```sql
@@ -240,7 +255,10 @@ removal), catalog relocation, full wipe behind a hard warning.
   Catalog and thumbnail cache live in `~/.local/share/photoflow/`.
 - **CLI / file manager**: `photoflow [folder|image]` — a folder opens in
   the grid, an image opens its parent folder fullscreen on that image
-  (the `Exec=%F` double-click path).
+  (the `Exec=%F` double-click path). Single instance: a second launch
+  hands its argument to the running window over a per-user QLocalSocket
+  (`forward_to_running` / `serve_single_instance`) and exits; the
+  window opens the path and raises itself.
 - **Windows**: same code; catalog/cache land in `%LOCALAPPDATA%`, trash is
   the Recycle Bin, settings the registry. The frozen exe self-registers
   in HKCU on every start (`register_windows_app`: Applications key +
@@ -335,5 +353,3 @@ UI thread never blocks on I/O or pixels; paste-on-500 stays responsive.
 - Local/selective edits, healing, curves.
 - XMP sidecars (SQLite is the source of truth; versioned stack JSON keeps
   the door open).
-- Single-instance reuse (double-clicking a second image spawns a second
-  process today).

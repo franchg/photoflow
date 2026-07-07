@@ -13,6 +13,7 @@ from PySide6.QtGui import (QColor, QFont, QPainter, QPainterPath, QPalette,
 from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate
 
 from models import (EditedRole, FLAG_PICK, FLAG_REJECT, FlagRole, NameRole,
+                    RawRole,
                     RatingRole, ThumbRole)
 
 CELL = QSize(196, 218)
@@ -101,6 +102,20 @@ class ThumbDelegate(QStyledItemDelegate):
             f.setBold(True)
             p.setFont(f)
             p.drawText(badge, Qt.AlignmentFlag.AlignCenter, "ƒ")
+
+        # RAW chip (the file is a RAW, or a paired RAW rides behind it)
+        if index.data(RawRole):
+            chip = QRect(r.left() + 6, r.top() + 6, 32, 15)
+            p.setBrush(_BADGE_BG)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(chip, 4, 4)
+            p.setPen(QPen(_BADGE_FG))
+            f = p.font()
+            f.setPixelSize(9)
+            f.setItalic(False)
+            f.setBold(True)
+            p.setFont(f)
+            p.drawText(chip, Qt.AlignmentFlag.AlignCenter, "RAW")
 
         if self._show_label:
             label = pal.color(QPalette.ColorRole.Text)

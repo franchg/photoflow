@@ -254,6 +254,8 @@ class ViewerWidget(QOpenGLWidget):
     wb_pick_canceled = Signal()
     vig_center_picked = Signal(float, float)  # visible-frame coords of click
     vig_pick_canceled = Signal()
+    view_changed = Signal()        # user zoomed/panned (compare-view sync)
+    focused = Signal()             # any mouse press (compare-view focus)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -375,6 +377,20 @@ class ViewerWidget(QOpenGLWidget):
         else:
             self._fit = True
             self.update()
+            self.view_changed.emit()
+
+    # -- compare-view sync ---------------------------------------------------
+
+    def view_state(self) -> tuple[bool, float, QPointF]:
+        return self._fit, self._scale, QPointF(self._pan)
+
+    def apply_view_state(self, fit: bool, scale: float,
+                         pan: QPointF) -> None:
+        """Mirror another viewer's zoom/pan without re-emitting."""
+        self._fit = fit
+        self._scale = scale
+        self._pan = QPointF(pan)
+        self.update()
 
     # -------------------------------------------------------- interactive crop
 
@@ -850,6 +866,7 @@ class ViewerWidget(QOpenGLWidget):
         self._fit = False
         self._maybe_request_full()
         self.update()
+        self.view_changed.emit()
 
     def _maybe_request_full(self) -> None:
         if (self._fid is not None and self._tex_level < 2
@@ -871,6 +888,7 @@ class ViewerWidget(QOpenGLWidget):
         self._set_scale(self._current_scale() * (1.25 ** steps), anchor)
 
     def mousePressEvent(self, ev) -> None:
+        self.focused.emit()
         if ev.button() == Qt.MouseButton.RightButton:
             if (self._fid is not None and not self._crop_mode
                     and not self._wb_pick and not self._vig_pick):
@@ -919,6 +937,7 @@ class ViewerWidget(QOpenGLWidget):
             delta = (ev.position() - self._drag_start) * dpr
             self._pan = self._pan_start + delta
             self.update()
+            self.view_changed.emit()
 
     def mouseReleaseEvent(self, ev) -> None:
         if ev.button() == Qt.MouseButton.RightButton:
@@ -973,3 +992,4 @@ class ViewerWidget(QOpenGLWidget):
         else:
             self._fit = True
             self.update()
+            self.view_changed.emit()

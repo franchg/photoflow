@@ -7,6 +7,7 @@ catalog, and drives copy/paste + export. Heavy work never runs here.
 from __future__ import annotations
 
 import copy
+import getpass
 import math
 import os
 import sys
@@ -14,13 +15,14 @@ import time
 from collections import OrderedDict
 
 from PySide6.QtCore import QFile, QProcess, QSettings, QSize, Qt, QTimer
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (QAction, QKeySequence, QPalette, QShortcut,
                            QSurfaceFormat)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
-                               QFileDialog, QLabel, QMainWindow, QMessageBox,
-                               QProgressDialog, QPushButton, QSplitter,
-                               QStackedWidget, QStatusBar, QToolBar,
-                               QVBoxLayout, QWidget)
+                               QFileDialog, QFrame, QHBoxLayout, QLabel,
+                               QMainWindow, QMessageBox, QProgressDialog,
+                               QPushButton, QSplitter, QStackedWidget,
+                               QStatusBar, QToolBar, QVBoxLayout, QWidget)
 
 import styles
 from catalog import Catalog
@@ -42,7 +44,7 @@ from views.stackpanel import StackPanel
 from views.viewer import ViewerWidget, default_gl_format
 from workers import VIEWER_FIT, WorkerHub, Workers
 
-PAGE_GRID, PAGE_VIEWER = 0, 1
+PAGE_GRID, PAGE_VIEWER, PAGE_COMPARE = 0, 1, 2
 VIEWER_CACHE_SIZE = 10
 PREFETCH_NEIGHBORS = 2
 
@@ -114,6 +116,13 @@ class MainWindow(QMainWindow):
         self.stacked = QStackedWidget()
         self.stacked.addWidget(self.grid)
         self.stacked.addWidget(viewer_page)
+        # compare page (index PAGE_COMPARE) is built lazily on first use
+        self._compare_panes: list[ViewerWidget] = []
+        self._compare_frames: list[QFrame] = []
+        self._compare_labels: list[QLabel] = []
+        self._compare_entries: list = []
+        self._compare_focus = 0
+        self._compare_syncing = False
 
         self.panel = StackPanel()
         self.tree = FolderTree()
@@ -308,6 +317,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Alt+Shift+V"), self,
                   activated=lambda: self._paste_edits(True))
         QShortcut(QKeySequence("Ctrl+L"), self, activated=self._apply_last_edit)
+        QShortcut(QKeySequence("B"), self, activated=self._toggle_compare)
         QShortcut(QKeySequence("C"), self, activated=self._start_crop)
         QShortcut(QKeySequence("W"), self, activated=self._start_wb_pick)
         QShortcut(QKeySequence("V"), self, activated=self._start_vig_pick)
@@ -331,6 +341,9 @@ class MainWindow(QMainWindow):
 
     def _show_hidden_setting(self) -> bool:
         return self.settings.value("show_hidden", False, type=bool)
+
+    def _pair_raw_setting(self) -> bool:
+        return self.settings.value("pair_raw", True, type=bool)
 
     def _clear_thumb_cache(self, interactive: bool = True) -> None:
         """Settings: drop every cached thumbnail (edits/ratings/flags stay)."""
@@ -428,6 +441,7 @@ class MainWindow(QMainWindow):
             theme=str(self.settings.value("theme", "system")),
             ui_scale=old_scale,
             show_hidden=self._show_hidden_setting(),
+            pair_raw=self._pair_raw_setting(),
             catalog_path=self.catalog.db_path,
             on_empty_catalog=self._empty_catalog,
             on_clear_thumbs=self._clear_thumb_cache,
@@ -454,6 +468,10 @@ class MainWindow(QMainWindow):
         if v["show_hidden"] != self._show_hidden_setting():
             self.settings.setValue("show_hidden", v["show_hidden"])
             self.tree.set_show_hidden(v["show_hidden"])
+            if self._current_folder:
+                self._scan(self._current_folder)
+        if v["pair_raw"] != self._pair_raw_setting():
+            self.settings.setValue("pair_raw", v["pair_raw"])
             if self._current_folder:
                 self._scan(self._current_folder)
         if v["catalog_path"] and v["catalog_path"] != self.catalog.db_path:
@@ -504,6 +522,16 @@ class MainWindow(QMainWindow):
         if folder != self._current_folder:
             self._scan(folder)
 
+    def handle_forwarded_open(self, path: str) -> None:
+        """A second launch handed us its argument: open it, come forward."""
+        if path:
+            self.open_path(path)
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     def open_path(self, path: str) -> None:
         """CLI / file-manager entry (Exec=%F): a folder opens in the grid,
         an image opens its parent folder and goes fullscreen on the image."""
@@ -523,7 +551,8 @@ class MainWindow(QMainWindow):
         self.tree.select_path(folder)
         self._viewer_cache.clear()
         self.model.clear()
-        self.workers.scan_folder(folder, self._show_hidden_setting())
+        self.workers.scan_folder(folder, self._show_hidden_setting(),
+                                 self._pair_raw_setting())
 
     def _force_rescan(self) -> None:
         """Ctrl+R: re-scan the current folder and rebuild all its thumbnails."""
@@ -614,6 +643,8 @@ class MainWindow(QMainWindow):
             while len(self._viewer_cache) > VIEWER_CACHE_SIZE:
                 self._viewer_cache.popitem(last=False)
         self.viewer.set_texture_image(fid, image, level)
+        for pane in self._compare_panes:
+            pane.set_texture_image(fid, image, level)
 
     # --------------------------------------------------------------- selection
 
@@ -678,7 +709,7 @@ class MainWindow(QMainWindow):
         self._fullscreen = True
         self._fs_prev_page = self.stacked.currentIndex()
         self._fs_was_maximized = self.isMaximized()
-        if self.stacked.currentIndex() != PAGE_VIEWER:
+        if self.stacked.currentIndex() not in (PAGE_VIEWER, PAGE_COMPARE):
             self.stacked.setCurrentIndex(PAGE_VIEWER)
             self._show_in_viewer(entry)
         self._toolbar.setVisible(False)
@@ -715,6 +746,96 @@ class MainWindow(QMainWindow):
                 and self.viewer.current_fid == entry.id):
             self.workers.request_viewer_image(entry.id, entry.path,
                                               self._fit_target(entry))
+
+    # ------------------------------------------------------------------ compare
+
+    @property
+    def in_compare_mode(self) -> bool:
+        return self.stacked.currentIndex() == PAGE_COMPARE
+
+    def _ensure_compare_page(self) -> None:
+        if self._compare_panes:
+            return
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        for i in range(2):
+            pane = ViewerWidget()
+            frame = QFrame()
+            frame.setObjectName("comparePane")
+            flay = QVBoxLayout(frame)
+            flay.setContentsMargins(2, 2, 2, 2)
+            flay.setSpacing(0)
+            label = QLabel()
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("padding: 2px; border: none;")
+            flay.addWidget(pane, 1)
+            flay.addWidget(label)
+            row.addWidget(frame, 1)
+            pane.focused.connect(lambda i=i: self._set_compare_focus(i))
+            pane.close_requested.connect(self._exit_compare)
+            pane.view_changed.connect(lambda i=i: self._sync_compare_view(i))
+            self._compare_panes.append(pane)
+            self._compare_frames.append(frame)
+            self._compare_labels.append(label)
+        self.stacked.addWidget(page)  # index PAGE_COMPARE
+
+    def _toggle_compare(self) -> None:
+        if self.in_compare_mode:
+            self._exit_compare()
+            return
+        entries = self._selected_entries()
+        if len(entries) != 2:
+            self.statusBar().showMessage(
+                "Compare: select exactly two photos, then press B", 4000)
+            return
+        self._ensure_compare_page()
+        self._compare_entries = entries
+        for pane, label, e in zip(self._compare_panes, self._compare_labels,
+                                  self._compare_entries):
+            pane.show_image(e.id, e.width, e.height, _entry_stack(e))
+            label.setText(e.name)
+            cached = self._viewer_cache.get(e.id)
+            if cached is not None:
+                pane.set_texture_image(e.id, cached[0], cached[1])
+            else:
+                self.workers.request_viewer_placeholder(e.id)
+                self.workers.request_viewer_image(e.id, e.path,
+                                                  self._fit_target(e))
+        self.stacked.setCurrentIndex(PAGE_COMPARE)
+        self._set_compare_focus(0)
+        self.statusBar().showMessage(
+            "Compare: click a side to focus it — rate/flag applies there; "
+            "Esc leaves", 6000)
+
+    def _exit_compare(self) -> None:
+        if not self.in_compare_mode:
+            return
+        self._compare_entries = []
+        self.stacked.setCurrentIndex(PAGE_GRID)
+        self.grid.setFocus()
+
+    def _set_compare_focus(self, i: int) -> None:
+        if not self.in_compare_mode and not self._compare_entries:
+            return
+        self._compare_focus = i
+        accent = self.palette().color(QPalette.ColorRole.Highlight).name()
+        for j, frame in enumerate(self._compare_frames):
+            color = accent if j == i else "transparent"
+            frame.setStyleSheet(
+                f"QFrame#comparePane {{ border: 2px solid {color}; }}")
+        self._compare_panes[i].setFocus()
+
+    def _sync_compare_view(self, source: int) -> None:
+        if self._compare_syncing or not self.in_compare_mode:
+            return
+        self._compare_syncing = True
+        try:
+            state = self._compare_panes[source].view_state()
+            self._compare_panes[1 - source].apply_view_state(*state)
+        finally:
+            self._compare_syncing = False
 
     def _fit_target(self, entry) -> int:
         dpr = self.viewer.devicePixelRatioF()
@@ -762,7 +883,7 @@ class MainWindow(QMainWindow):
 
     def _delete_selected(self) -> None:
         if (self.viewer.in_crop_mode or self.viewer.in_wb_pick_mode
-                or self.viewer.in_vig_pick_mode):
+                or self.viewer.in_vig_pick_mode or self.in_compare_mode):
             return
         entries = self._selected_entries()
         if not entries:
@@ -776,9 +897,16 @@ class MainWindow(QMainWindow):
         prev_row = self.grid.selectionModel().currentIndex().row()
         trashed, failed = [], []
         for e in entries:
-            (trashed if QFile.moveToTrash(e.path) else failed).append(e)
+            if QFile.moveToTrash(e.path):
+                trashed.append(e)
+                if e.raw_twin_path:  # the pair goes to the trash together
+                    QFile.moveToTrash(e.raw_twin_path)
+            else:
+                failed.append(e)
         if trashed:
             ids = [e.id for e in trashed]
+            ids += [e.raw_twin_id for e in trashed
+                    if e.raw_twin_id is not None]
             self.catalog.remove_files(ids)
             self.model.remove_entries(ids)
             for fid in ids:
@@ -806,32 +934,45 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 5000)
         self._update_count()
 
+    def _cull_targets(self) -> list:
+        """Rating/flag targets: the focused compare pane's photo when
+        comparing, otherwise the grid selection."""
+        if self.in_compare_mode and self._compare_entries:
+            return [self._compare_entries[self._compare_focus]]
+        return self._selected_entries()
+
     def _rate(self, rating: int) -> None:
-        entries = self._selected_entries()
+        entries = self._cull_targets()
         for e in entries:
             e_rating = rating if e.rating != rating else 0
             self.catalog.set_rating(e.id, e_rating)
             self.model.set_rating(e.id, e_rating)
+            if e.raw_twin_id is not None:  # the pair culls as one photo
+                self.catalog.set_rating(e.raw_twin_id, e_rating)
         self._cull_advance(entries)
 
     def _flag(self, flag: int) -> None:
-        entries = self._selected_entries()
+        entries = self._cull_targets()
         for e in entries:
             self.catalog.set_flag(e.id, flag)
             self.model.set_flag(e.id, flag)
+            if e.raw_twin_id is not None:
+                self.catalog.set_flag(e.raw_twin_id, flag)
         self._cull_advance(entries)
 
     def _cull_advance(self, entries: list) -> None:
         """Rating or flagging a single photo moves on to the next one —
         culling a folder becomes one pass of keystrokes. Multi-selections
-        stay put (advancing would destroy the selection)."""
-        if len(entries) == 1:
+        stay put (advancing would destroy the selection), and compare
+        mode stays on its pair."""
+        if len(entries) == 1 and not self.in_compare_mode:
             self._navigate(1)
 
     # ------------------------------------------------------------- interactive crop
 
     def _start_crop(self) -> None:
-        if self._current_entry() is None or self.viewer.in_crop_mode:
+        if (self._current_entry() is None or self.viewer.in_crop_mode
+                or self.in_compare_mode):
             return
         if self.stacked.currentIndex() != PAGE_VIEWER:
             self._open_viewer()
@@ -858,7 +999,7 @@ class MainWindow(QMainWindow):
     def _start_wb_pick(self) -> None:
         if (self._current_entry() is None or self.viewer.in_crop_mode
                 or self.viewer.in_wb_pick_mode
-                or self.viewer.in_vig_pick_mode):
+                or self.viewer.in_vig_pick_mode or self.in_compare_mode):
             return
         if self.stacked.currentIndex() != PAGE_VIEWER:
             self._open_viewer()
@@ -876,7 +1017,7 @@ class MainWindow(QMainWindow):
     def _start_vig_pick(self) -> None:
         if (self._current_entry() is None or self.viewer.in_crop_mode
                 or self.viewer.in_wb_pick_mode
-                or self.viewer.in_vig_pick_mode):
+                or self.viewer.in_vig_pick_mode or self.in_compare_mode):
             return
         if self.stacked.currentIndex() != PAGE_VIEWER:
             self._open_viewer()
@@ -1034,6 +1175,61 @@ class MainWindow(QMainWindow):
         super().closeEvent(ev)
 
 
+# --------------------------------------------------------------- single instance
+#
+# One window per user: a second launch hands its argument to the running
+# instance over a QLocalSocket and exits. Per-user socket name — Windows
+# named pipes are machine-global.
+
+_INSTANCE_SOCKET = f"photoflow-{getpass.getuser()}"
+
+
+def forward_to_running(target: str | None,
+                       name: str = _INSTANCE_SOCKET) -> bool:
+    """True when a running instance accepted this launch (caller exits)."""
+    sock = QLocalSocket()
+    sock.connectToServer(name)
+    if not sock.waitForConnected(300):
+        return False
+    sock.write((target or "").encode("utf-8") + b"\n")
+    sock.flush()
+    sock.waitForBytesWritten(1000)
+    sock.disconnectFromServer()
+    return True
+
+
+def serve_single_instance(win: MainWindow,
+                          name: str = _INSTANCE_SOCKET) -> QLocalServer | None:
+    """Listen for forwarded launches; hand their argument to the window."""
+    # a crash can leave a stale unix socket behind; we only get here after
+    # the connect probe failed, so it is safe to clear
+    QLocalServer.removeServer(name)
+    server = QLocalServer(win)
+    if not server.listen(name):
+        return None
+
+    def on_connection() -> None:
+        sock = server.nextPendingConnection()
+        if sock is None:
+            return
+        buf = bytearray()
+
+        def on_read() -> None:
+            buf.extend(bytes(sock.readAll()))
+            if b"\n" not in buf:
+                return
+            path = buf.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
+            sock.readyRead.disconnect(on_read)
+            sock.disconnectFromServer()
+            win.handle_forwarded_open(path)
+
+        sock.readyRead.connect(on_read)
+        on_read()  # the payload may already be buffered
+
+    server.newConnection.connect(on_connection)
+    return server
+
+
 def main() -> int:
     # UI scale must be in place before Qt starts; it multiplies the
     # system DPI scaling (Settings → Appearance → UI scale).
@@ -1058,7 +1254,10 @@ def main() -> int:
     # photoflow [folder|image] — also the Exec=%F double-click path
     target = next((a for a in app.arguments()[1:] if not a.startswith("-")),
                   None)
+    if forward_to_running(target):
+        return 0  # the running window took over
     win = MainWindow(initial_path=target)
+    win._instance_server = serve_single_instance(win)
     win.show()
     return app.exec()
 

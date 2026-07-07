@@ -700,6 +700,31 @@ def main() -> None:
     check("raw resize export", out.endswith(".jpg") and decode.read_header(
         open(out, "rb").read()) == (128, 96))
 
+    # ---- RAW+JPEG pairing rule ----------------------------------------------
+    from models import FileEntry
+    from workers import _pair_raw_jpeg
+
+    def fe(i, path, raw):
+        return FileEntry(id=i, path=path, name=os.path.basename(path),
+                         mtime=0, size=0, is_raw=raw)
+
+    paired = _pair_raw_jpeg([
+        fe(1, "/d/a.jpg", False), fe(2, "/d/a.nef", True),   # a clean pair
+        fe(3, "/d/b.jpg", False),                            # loner jpeg
+        fe(4, "/d/c.nef", True),                             # loner raw
+        fe(5, "/d/dup.jpg", False), fe(6, "/d/DUP.JPG", False),
+        fe(7, "/d/dup.nef", True),                           # ambiguous stem
+    ])
+    by_id = {e.id: e for e in paired}
+    check("pairing: clean pair collapses",
+          2 not in by_id and by_id[1].raw_twin_id == 2
+          and by_id[1].raw_twin_path == "/d/a.nef")
+    check("pairing: loners untouched",
+          by_id[3].raw_twin_id is None and 4 in by_id)
+    check("pairing: ambiguous stems stay separate",
+          all(i in by_id for i in (5, 6, 7))
+          and by_id[5].raw_twin_id is None)
+
     # ---- Windows Open With / Default Apps registration ----------------------
     from desktopintegration import (WINDOWS_PROGID, register_windows_app,
                                     windows_registry_spec)

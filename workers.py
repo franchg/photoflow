@@ -49,6 +49,26 @@ def _load_stack(stack_json: str | None) -> EditStack | None:
     return stack if stack.has_edits() else None
 
 
+def _pair_raw_jpeg(entries: list[FileEntry]) -> list[FileEntry]:
+    """Collapse same-stem RAW+JPEG shots into one photo: the JPEG (the
+    camera's own development) is what shows and edits, the RAW rides
+    behind it for rating/flag mirroring and paired trash. Conservative:
+    only exact one-JPEG-one-RAW stems pair."""
+    by_stem: dict[str, list[FileEntry]] = {}
+    for e in entries:
+        by_stem.setdefault(os.path.splitext(e.path)[0].lower(), []).append(e)
+    hidden: set[int] = set()
+    for group in by_stem.values():
+        jpegs = [e for e in group if os.path.splitext(e.name)[1].lower()
+                 in decode.JPEG_EXTENSIONS]
+        raws = [e for e in group if e.is_raw]
+        if len(jpegs) == 1 and len(raws) == 1 and len(group) == 2:
+            jpegs[0].raw_twin_id = raws[0].id
+            jpegs[0].raw_twin_path = raws[0].path
+            hidden.add(raws[0].id)
+    return [e for e in entries if e.id not in hidden]
+
+
 class WorkerHub(QObject):
     """Lives on the UI thread; workers emit, views/models consume."""
     scan_done = Signal(int, object)                    # gen, list[FileEntry]
@@ -97,12 +117,15 @@ class Workers:
 
     # -- folder scan -----------------------------------------------------------
 
-    def scan_folder(self, folder: str, include_hidden: bool = False) -> int:
+    def scan_folder(self, folder: str, include_hidden: bool = False,
+                    pair_raw: bool = True) -> int:
         gen = self.bump_generation()
-        self._fast.submit(self._scan_job, folder, gen, include_hidden)
+        self._fast.submit(self._scan_job, folder, gen, include_hidden,
+                          pair_raw)
         return gen
 
-    def _scan_job(self, folder: str, gen: int, include_hidden: bool) -> None:
+    def _scan_job(self, folder: str, gen: int, include_hidden: bool,
+                  pair_raw: bool = True) -> None:
         try:
             found = []
             with os.scandir(folder) as it:
@@ -125,12 +148,16 @@ class Workers:
         entries = []
         for r in records:
             stack = _load_stack(r.stack_json)
+            ext = os.path.splitext(r.path)[1].lower()
             entries.append(FileEntry(
                 id=r.id, path=r.path, name=os.path.basename(r.path),
                 mtime=r.mtime, size=r.size, width=r.width, height=r.height,
                 orientation=r.orientation, capture_dt=r.capture_dt,
                 rating=r.rating, flag=r.flag, stack_json=r.stack_json,
-                has_edits=stack is not None, has_thumb_cache=r.has_thumb))
+                has_edits=stack is not None, has_thumb_cache=r.has_thumb,
+                is_raw=ext in decode.RAW_EXTENSIONS))
+        if pair_raw:
+            entries = _pair_raw_jpeg(entries)
         self.hub.scan_done.emit(gen, entries)
         # Background trickle: warm the cache for everything not yet thumbed.
         # On-demand (visible) requests run on the wider `thumb` pool and the

@@ -25,6 +25,7 @@ SCALE_VALUES = [0.9, 1.0, 1.1, 1.25, 1.5]
 class SettingsDialog(QDialog):
     def __init__(self, parent, *, theme: str, show_hidden: bool,
                  catalog_path: str, on_empty_catalog, ui_scale: float = 1.0,
+                 pair_raw: bool = True,
                  on_clear_thumbs=None, on_remove_missing=None,
                  on_set_default=None):
         super().__init__(parent)
@@ -72,6 +73,12 @@ class SettingsDialog(QDialog):
         self._hidden.setToolTip(
             "Applies to the folder tree and to which JPEGs a folder scan picks up")
         blay.addWidget(self._hidden)
+        self._pair_raw = QCheckBox("Treat RAW+JPEG pairs as one photo")
+        self._pair_raw.setChecked(pair_raw)
+        self._pair_raw.setToolTip(
+            "Same-name RAW and JPEG show as a single photo: the JPEG is "
+            "displayed, ratings and trash apply to both files")
+        blay.addWidget(self._pair_raw)
         root.addWidget(browsing)
 
         if on_set_default is not None:  # Linux only: xdg-mime association
@@ -170,5 +177,6 @@ class SettingsDialog(QDialog):
             "theme": THEME_MODES[max(0, self._theme_group.checkedId())],
             "ui_scale": SCALE_VALUES[max(0, self._scale_group.checkedId())],
             "show_hidden": self._hidden.isChecked(),
+            "pair_raw": self._pair_raw.isChecked(),
             "catalog_path": self._path.text().strip(),
         }
