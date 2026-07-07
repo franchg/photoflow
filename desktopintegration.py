@@ -1,6 +1,8 @@
-"""Linux desktop integration: launcher entry, theme icons, and the xdg
-default-viewer association for JPEG/PNG. UI-free — app.py wraps these in
-dialogs/status messages."""
+"""Desktop integration. Linux: launcher entry, theme icons, and the xdg
+default-viewer association for JPEG/PNG. Windows: HKCU registration
+(Applications key + ProgID + Capabilities) so Explorer's "Open with" lists
+photoflow by name and it appears under Settings → Default apps. UI-free —
+app.py wraps these in dialogs/status messages."""
 from __future__ import annotations
 
 import os
@@ -48,12 +50,18 @@ def register_linux_desktop(data_home: str | None = None, *,
         "[Desktop Entry]",
         "Type=Application",
         "Name=photoflow",
-        "Comment=Fast JPEG/PNG browser, culling and non-destructive editor",
+        "Comment=Fast photo browser, culling and non-destructive editor",
         f"Exec={exec_cmd} %F",
         "Icon=photoflow",
         "Terminal=false",
         "Categories=Graphics;Photography;Viewer;",
-        "MimeType=image/jpeg;image/png;",
+        # RAW mimes make "Open with" offer photoflow for camera files;
+        # the *default*-viewer button stays JPEG/PNG only.
+        "MimeType=image/jpeg;image/png;image/x-adobe-dng;"
+        "image/x-canon-cr2;image/x-canon-cr3;image/x-nikon-nef;"
+        "image/x-nikon-nrw;image/x-sony-arw;image/x-fuji-raf;"
+        "image/x-olympus-orf;image/x-panasonic-rw2;image/x-pentax-pef;"
+        "image/x-samsung-srw;",
         "StartupWMClass=photoflow",
     )) + "\n"
     path = os.path.join(apps_dir, "photoflow.desktop")
@@ -78,3 +86,76 @@ def set_default_viewer() -> tuple[bool, str]:
     if result.returncode == 0:
         return True, ""
     return False, result.stderr.strip() or "xdg-mime failed"
+
+
+# ---------------------------------------------------------------- Windows
+
+WINDOWS_PROGID = "photoflow.image"
+_WIN_APP_KEY = r"Software\Classes\Applications\photoflow.exe"
+_WIN_PROG_KEY = r"Software\Classes" + "\\" + WINDOWS_PROGID
+_WIN_CAPS_KEY = r"Software\photoflow\Capabilities"
+
+
+def windows_registry_spec(exe: str) -> list[tuple[str, str | None, str]]:
+    """The HKCU registration as data: (subkey, value name (None = the
+    key's default value), string data) triples. Split out so the test
+    suite can check it on any platform."""
+    from decode import SCAN_EXTENSIONS
+    cmd = f'"{exe}" "%1"'
+    icon = f'"{exe}",0'
+    spec = [
+        (_WIN_APP_KEY, "FriendlyAppName", "photoflow"),
+        (_WIN_APP_KEY + r"\shell\open\command", None, cmd),
+        (_WIN_APP_KEY + r"\DefaultIcon", None, icon),
+        (_WIN_PROG_KEY, None, "Image (photoflow)"),
+        (_WIN_PROG_KEY + r"\shell\open\command", None, cmd),
+        (_WIN_PROG_KEY + r"\DefaultIcon", None, icon),
+        (_WIN_CAPS_KEY, "ApplicationName", "photoflow"),
+        (_WIN_CAPS_KEY, "ApplicationDescription",
+         "Fast photo browsing, culling and non-destructive editing"),
+        # Settings → Default apps discovers photoflow through this pointer
+        (r"Software\RegisteredApplications", "photoflow", _WIN_CAPS_KEY),
+    ]
+    for ext in sorted(SCAN_EXTENSIONS):
+        spec.append((_WIN_APP_KEY + r"\SupportedTypes", ext, ""))
+        spec.append((_WIN_CAPS_KEY + r"\FileAssociations", ext,
+                     WINDOWS_PROGID))
+    return spec
+
+
+def register_windows_app(exe: str | None = None, *,
+                         force: bool = False) -> bool:
+    """Register photoflow in HKCU (no admin rights involved) so "Open
+    with" offers it by name and Settings → Default apps lists it. Runs on
+    every frozen start, like the Linux .desktop entry, so the registered
+    command follows the exe if its folder moves. Actually *becoming* the
+    default stays a user click — Windows forbids apps defaulting
+    themselves, by design.
+    """
+    if sys.platform != "win32":
+        return False
+    if not (force or getattr(sys, "frozen", False)):
+        return False
+    import ctypes
+    import winreg
+
+    exe = os.path.realpath(exe or sys.executable)
+    try:
+        changed = False
+        for subkey, name, data in windows_registry_spec(exe):
+            with winreg.CreateKeyEx(
+                    winreg.HKEY_CURRENT_USER, subkey, 0,
+                    winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                try:
+                    if winreg.QueryValueEx(key, name)[0] == data:
+                        continue
+                except OSError:
+                    pass
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, data)
+                changed = True
+        if changed:
+            # SHCNE_ASSOCCHANGED: tell Explorer the associations moved
+            ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)
+        return True
+    except OSError:
+        return False

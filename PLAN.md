@@ -242,8 +242,13 @@ removal), catalog relocation, full wipe behind a hard warning.
   the grid, an image opens its parent folder fullscreen on that image
   (the `Exec=%F` double-click path).
 - **Windows**: same code; catalog/cache land in `%LOCALAPPDATA%`, trash is
-  the Recycle Bin, settings the registry. Default-app association is
-  manual (OS restriction; see "Not built").
+  the Recycle Bin, settings the registry. The frozen exe self-registers
+  in HKCU on every start (`register_windows_app`: Applications key +
+  ProgID + Capabilities + RegisteredApplications pointer), so "Open with"
+  lists photoflow by name, Settings → Default apps shows it, and the
+  registered command heals if the exe moves — the exact analog of the
+  Linux `.desktop` refresh. Actually *becoming* the default stays a user
+  click; programmatic self-defaulting is OS-forbidden since Windows 10.
 
 ## Packaging & CI
 
@@ -323,8 +328,5 @@ UI thread never blocks on I/O or pixels; paste-on-500 stays responsive.
 - Local/selective edits, healing, curves.
 - XMP sidecars (SQLite is the source of truth; versioned stack JSON keeps
   the door open).
-- Windows default-app *registration* (ProgID + capabilities + Settings
-  deep-link). Manual "Open with → Always" works today; programmatic
-  self-defaulting is impossible by OS design since Windows 10.
 - Single-instance reuse (double-clicking a second image spawns a second
   process today).

@@ -25,7 +25,8 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
 import styles
 from catalog import Catalog
 from decode import SCAN_EXTENSIONS
-from desktopintegration import register_linux_desktop, set_default_viewer
+from desktopintegration import (register_linux_desktop, register_windows_app,
+                                set_default_viewer)
 from theme import THEMES, apply_theme, capture_native_theme
 from editstack import EditClipboard, EditStack, StackHistory
 from render import solve_white_balance
@@ -1048,6 +1049,7 @@ def main() -> int:
     app.setWindowIcon(styles.app_icon())
     try:
         register_linux_desktop()
+        register_windows_app()
     except OSError:
         pass  # desktop integration must never block startup
     capture_native_theme(app)

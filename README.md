@@ -51,8 +51,9 @@ A few limitations you should know about before starting:
   calibration is left to the operating system.
 - The macOS build runs on Apple Silicon only and is unsigned, so the
   first launch needs a one-time approval, described below. On Windows,
-  making photoflow the default viewer is a manual step. Opening a second
-  image from the file manager starts a second window.
+  making photoflow the default viewer is one "Open with → Always" click,
+  since Windows insists on asking you. Opening a second image from the
+  file manager starts a second window.
 
 ## Install
 
@@ -82,9 +83,12 @@ Unzip `photoflow-windows-x64.zip`, open the `photoflow` folder and run
 `photoflow.exe`.
 
 The build is unsigned, so SmartScreen may complain on the first run:
-click "More info", then "Run anyway", and it will not ask again. To open
-images with photoflow by default, right-click an image, choose "Open
-with", then "Choose another app", pick photoflow and tick "Always".
+click "More info", then "Run anyway", and it will not ask again. On that
+first run photoflow also registers itself with Windows, so to open your
+images with it by default you right-click an image, choose "Open with",
+pick photoflow from the list and tick "Always". It appears under
+Settings → Default apps too, and if you ever move the photoflow folder,
+the registration repairs itself the next time you launch it.
 
 #### macOS (Apple Silicon, all Macs since 2020)
 

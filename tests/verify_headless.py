@@ -700,6 +700,64 @@ def main() -> None:
     check("raw resize export", out.endswith(".jpg") and decode.read_header(
         open(out, "rb").read()) == (128, 96))
 
+    # ---- Windows Open With / Default Apps registration ----------------------
+    from desktopintegration import (WINDOWS_PROGID, register_windows_app,
+                                    windows_registry_spec)
+    fake_exe = os.path.join(tmp, "photoflow.exe")
+    spec = {(k, n): v for k, n, v in windows_registry_spec(fake_exe)}
+    check("win spec: quoted open command",
+          spec[(r"Software\Classes\Applications\photoflow.exe"
+                r"\shell\open\command", None)] == f'"{fake_exe}" "%1"')
+    check("win spec: jpeg and raw associations",
+          spec[(r"Software\photoflow\Capabilities\FileAssociations",
+                ".jpg")] == WINDOWS_PROGID
+          and spec[(r"Software\photoflow\Capabilities\FileAssociations",
+                    ".nef")] == WINDOWS_PROGID)
+    check("win spec: default-apps pointer",
+          spec[(r"Software\RegisteredApplications", "photoflow")]
+          == r"Software\photoflow\Capabilities")
+    check("win register is a no-op off Windows",
+          register_windows_app(fake_exe, force=True) is (sys.platform == "win32"))
+
+    if sys.platform == "win32":
+        import winreg
+
+        def _deltree(sub: str) -> None:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, sub, 0,
+                                    winreg.KEY_ALL_ACCESS) as k:
+                    while True:
+                        try:
+                            child = winreg.EnumKey(k, 0)
+                        except OSError:
+                            break
+                        _deltree(sub + "\\" + child)
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
+            except FileNotFoundError:
+                pass
+
+        try:
+            with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Classes\Applications\photoflow.exe"
+                    r"\shell\open\command") as k:
+                got = winreg.QueryValueEx(k, None)[0]
+            check("win register readback",
+                  got == f'"{os.path.realpath(fake_exe)}" "%1"', got)
+            check("win register idempotent",
+                  register_windows_app(fake_exe, force=True))
+        finally:
+            _deltree(r"Software\Classes\Applications\photoflow.exe")
+            _deltree(r"Software\Classes" + "\\" + WINDOWS_PROGID)
+            _deltree(r"Software\photoflow")
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                    r"Software\RegisteredApplications", 0,
+                                    winreg.KEY_SET_VALUE) as k:
+                    winreg.DeleteValue(k, "photoflow")
+            except FileNotFoundError:
+                pass
+
     print(f"\nALL PASS  (workdir {tmp})")
 
 
