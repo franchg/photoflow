@@ -82,7 +82,8 @@ class ExportDialog(QDialog):
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Export")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+            f"Export {count} photo{'s' if count != 1 else ''}")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)

@@ -977,11 +977,9 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------------- export
 
     def _export(self) -> None:
+        # Exactly the selection (or the current photo when nothing is
+        # explicitly selected) — never the whole folder.
         entries = self._selected_entries()
-        if len(entries) <= 1:
-            entries = [self.model.entry_by_id(self.proxy.index(r, 0).data(IdRole))
-                       for r in range(self.proxy.rowCount())]
-            entries = [e for e in entries if e]
         if not entries:
             return
         items = [ExportItem(e.id, e.path, e.stack_json, e.capture_dt, e.mtime)

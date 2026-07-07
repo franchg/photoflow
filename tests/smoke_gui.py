@@ -26,7 +26,8 @@ app = QApplication(sys.argv)
 
 import app as photoflow_app  # noqa: E402
 from editstack import EditStack, Op  # noqa: E402
-from PySide6.QtCore import QSettings  # noqa: E402
+from PySide6.QtCore import QItemSelectionModel, QSettings  # noqa: E402
+from PySide6.QtWidgets import QDialogButtonBox  # noqa: E402
 
 # Fully isolated settings: redirect ALL user-scope QSettings of this process
 # into a temp dir, so the tests can neither read nor pollute the real
@@ -624,6 +625,46 @@ pump(lambda: win.catalog._read_conn().execute(
 assert win.catalog.get_stack(fid_keep) is not None  # others untouched
 assert win._remove_missing_entries(interactive=False) == 0  # now all exist
 ok("remove missing files: sweep removed 1, edits of existing files kept")
+
+# export scope: Ctrl+E must offer exactly the selection (a single selection
+# used to silently fall back to the whole folder), and the dialog's confirm
+# button carries the count. Stub the dialog so nothing modal opens.
+export_counts = []
+_real_dialog = photoflow_app.ExportDialog
+
+
+class _DialogSpy:
+    DialogCode = _real_dialog.DialogCode
+
+    def __init__(self, count, parent=None, sample=None):
+        export_counts.append(count)
+
+    def exec(self):
+        return self.DialogCode.Rejected
+
+
+photoflow_app.ExportDialog = _DialogSpy
+try:
+    win.grid.selectionModel().clear()
+    win.grid.setCurrentIndex(win.proxy.index(0, 0))
+    app.processEvents()
+    win._export()                      # no explicit selection → current photo
+    for r in range(3):
+        win.grid.selectionModel().select(
+            win.proxy.index(r, 0), QItemSelectionModel.SelectionFlag.Select
+            | QItemSelectionModel.SelectionFlag.Rows)
+    app.processEvents()
+    win._export()                      # multi-selection → exactly those
+    assert export_counts == [1, 3], export_counts
+finally:
+    photoflow_app.ExportDialog = _real_dialog
+from views.exportdialog import ExportDialog  # noqa: E402
+_dlg = ExportDialog(3)
+_btn = _dlg.findChild(QDialogButtonBox).button(
+    QDialogButtonBox.StandardButton.Ok)
+assert _btn.text() == "Export 3 photos", _btn.text()
+_dlg.deleteLater()
+ok("export offers exactly the selection; dialog button shows the count")
 
 win.close()
 app.processEvents()
