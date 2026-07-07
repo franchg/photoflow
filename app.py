@@ -19,10 +19,10 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (QAction, QKeySequence, QPalette, QShortcut,
                            QSurfaceFormat)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
-                               QFileDialog, QFrame, QHBoxLayout, QLabel,
-                               QMainWindow, QMessageBox, QProgressDialog,
-                               QPushButton, QSplitter, QStackedWidget,
-                               QStatusBar, QToolBar, QVBoxLayout, QWidget)
+                               QFileDialog, QLabel, QMainWindow, QMessageBox,
+                               QProgressDialog, QPushButton, QSplitter,
+                               QStackedWidget, QStatusBar, QToolBar,
+                               QVBoxLayout, QWidget)
 
 import styles
 from catalog import Catalog
@@ -36,6 +36,7 @@ from export import Exporter, ExportItem
 from views.exportdialog import ExportDialog
 from models import (FLAG_NONE, FLAG_PICK, FLAG_REJECT, FileListModel,
                     FilterProxy, IdRole, SORT_DATE, SORT_NAME)
+from views.compare import CompareView
 from views.foldertree import FolderTree
 from views.helpdialog import HelpDialog
 from views.grid import FilmstripView, GridView
@@ -117,12 +118,7 @@ class MainWindow(QMainWindow):
         self.stacked.addWidget(self.grid)
         self.stacked.addWidget(viewer_page)
         # compare page (index PAGE_COMPARE) is built lazily on first use
-        self._compare_panes: list[ViewerWidget] = []
-        self._compare_frames: list[QFrame] = []
-        self._compare_labels: list[QLabel] = []
-        self._compare_entries: list = []
-        self._compare_focus = 0
-        self._compare_syncing = False
+        self._compare: CompareView | None = None
 
         self.panel = StackPanel()
         self.tree = FolderTree()
@@ -643,8 +639,8 @@ class MainWindow(QMainWindow):
             while len(self._viewer_cache) > VIEWER_CACHE_SIZE:
                 self._viewer_cache.popitem(last=False)
         self.viewer.set_texture_image(fid, image, level)
-        for pane in self._compare_panes:
-            pane.set_texture_image(fid, image, level)
+        if self._compare is not None:
+            self._compare.deliver_texture(fid, image, level)
 
     # --------------------------------------------------------------- selection
 
@@ -753,34 +749,6 @@ class MainWindow(QMainWindow):
     def in_compare_mode(self) -> bool:
         return self.stacked.currentIndex() == PAGE_COMPARE
 
-    def _ensure_compare_page(self) -> None:
-        if self._compare_panes:
-            return
-        page = QWidget()
-        row = QHBoxLayout(page)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(4)
-        for i in range(2):
-            pane = ViewerWidget()
-            frame = QFrame()
-            frame.setObjectName("comparePane")
-            flay = QVBoxLayout(frame)
-            flay.setContentsMargins(2, 2, 2, 2)
-            flay.setSpacing(0)
-            label = QLabel()
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet("padding: 2px; border: none;")
-            flay.addWidget(pane, 1)
-            flay.addWidget(label)
-            row.addWidget(frame, 1)
-            pane.focused.connect(lambda i=i: self._set_compare_focus(i))
-            pane.close_requested.connect(self._exit_compare)
-            pane.view_changed.connect(lambda i=i: self._sync_compare_view(i))
-            self._compare_panes.append(pane)
-            self._compare_frames.append(frame)
-            self._compare_labels.append(label)
-        self.stacked.addWidget(page)  # index PAGE_COMPARE
-
     def _toggle_compare(self) -> None:
         if self.in_compare_mode:
             self._exit_compare()
@@ -790,21 +758,20 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 "Compare: select exactly two photos, then press B", 4000)
             return
-        self._ensure_compare_page()
-        self._compare_entries = entries
-        for pane, label, e in zip(self._compare_panes, self._compare_labels,
-                                  self._compare_entries):
-            pane.show_image(e.id, e.width, e.height, _entry_stack(e))
-            label.setText(e.name)
+        if self._compare is None:
+            self._compare = CompareView()
+            self._compare.exit_requested.connect(self._exit_compare)
+            self.stacked.addWidget(self._compare)  # index PAGE_COMPARE
+        self.stacked.setCurrentIndex(PAGE_COMPARE)
+        self._compare.show_pair(entries, [_entry_stack(e) for e in entries])
+        for e in entries:
             cached = self._viewer_cache.get(e.id)
             if cached is not None:
-                pane.set_texture_image(e.id, cached[0], cached[1])
+                self._compare.deliver_texture(e.id, cached[0], cached[1])
             else:
                 self.workers.request_viewer_placeholder(e.id)
                 self.workers.request_viewer_image(e.id, e.path,
                                                   self._fit_target(e))
-        self.stacked.setCurrentIndex(PAGE_COMPARE)
-        self._set_compare_focus(0)
         self.statusBar().showMessage(
             "Compare: click a side to focus it — rate/flag applies there; "
             "Esc leaves", 6000)
@@ -812,30 +779,9 @@ class MainWindow(QMainWindow):
     def _exit_compare(self) -> None:
         if not self.in_compare_mode:
             return
-        self._compare_entries = []
+        self._compare.clear()
         self.stacked.setCurrentIndex(PAGE_GRID)
         self.grid.setFocus()
-
-    def _set_compare_focus(self, i: int) -> None:
-        if not self.in_compare_mode and not self._compare_entries:
-            return
-        self._compare_focus = i
-        accent = self.palette().color(QPalette.ColorRole.Highlight).name()
-        for j, frame in enumerate(self._compare_frames):
-            color = accent if j == i else "transparent"
-            frame.setStyleSheet(
-                f"QFrame#comparePane {{ border: 2px solid {color}; }}")
-        self._compare_panes[i].setFocus()
-
-    def _sync_compare_view(self, source: int) -> None:
-        if self._compare_syncing or not self.in_compare_mode:
-            return
-        self._compare_syncing = True
-        try:
-            state = self._compare_panes[source].view_state()
-            self._compare_panes[1 - source].apply_view_state(*state)
-        finally:
-            self._compare_syncing = False
 
     def _fit_target(self, entry) -> int:
         dpr = self.viewer.devicePixelRatioF()
@@ -937,8 +883,10 @@ class MainWindow(QMainWindow):
     def _cull_targets(self) -> list:
         """Rating/flag targets: the focused compare pane's photo when
         comparing, otherwise the grid selection."""
-        if self.in_compare_mode and self._compare_entries:
-            return [self._compare_entries[self._compare_focus]]
+        if self.in_compare_mode and self._compare is not None:
+            e = self._compare.focused_entry()
+            if e is not None:
+                return [e]
         return self._selected_entries()
 
     def _rate(self, rating: int) -> None:

@@ -219,11 +219,13 @@ workers (thread pools)               catalog (SQLite WAL)          UI (Qt main t
         └──── queued Qt signals; generation counter kills stale work ────┘
 ```
 
-The compare view (B on a two-photo selection) is a third stacked page
-with two extra `ViewerWidget`s: zoom/pan mirror through
-`view_changed`/`apply_view_state` with a re-entry guard, a click focuses
-a pane (accent border), and rating/flag keys target the focused photo
-(`_cull_targets`) with auto-advance suspended. Edit/crop/pick/trash
+The compare view (B on a two-photo selection) is a third stacked page,
+`views/compare.py`: a self-contained widget owning two `ViewerWidget`s,
+the pane focus (accent border) and the zoom/pan mirroring
+(`view_changed`/`apply_view_state` with a re-entry guard). The
+controller only routes: rating/flag keys target
+`CompareView.focused_entry()` (`_cull_targets`) with auto-advance
+suspended, textures are delivered by fid, and edit/crop/pick/trash
 actions are guarded off while comparing.
 
 ### Catalog schema

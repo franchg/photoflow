@@ -705,16 +705,16 @@ win.grid.selectionModel().select(
 app.processEvents()
 win._toggle_compare()
 assert win.stacked.currentIndex() == photoflow_app.PAGE_COMPARE
-assert len(win._compare_entries) == 2
-ce0, ce1 = win._compare_entries
-win._set_compare_focus(1)
+assert len(win._compare.entries) == 2
+ce0, ce1 = win._compare.entries
+win._compare.set_focus(1)
 win._rate(5)
 app.processEvents()
 assert win.model.entry_by_id(ce1.id).rating == 5
 assert win.model.entry_by_id(ce0.id).rating != 5
 assert win.stacked.currentIndex() == photoflow_app.PAGE_COMPARE  # no advance
-win._compare_panes[0]._set_scale(2.0, QPointF(0, 0))
-fit1, scale1, _pan1 = win._compare_panes[1].view_state()
+win._compare.panes[0]._set_scale(2.0, QPointF(0, 0))
+fit1, scale1, _pan1 = win._compare.panes[1].view_state()
 assert not fit1 and abs(scale1 - 2.0) < 1e-9, (fit1, scale1)
 win._exit_compare()
 assert win.stacked.currentIndex() == photoflow_app.PAGE_GRID

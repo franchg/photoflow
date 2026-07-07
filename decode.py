@@ -18,7 +18,6 @@ like the JPEG path; callers apply EXIF orientation.
 """
 from __future__ import annotations
 
-import functools
 import io
 import os
 import shutil
@@ -105,7 +104,7 @@ def read_header(data: bytes) -> tuple[int, int]:
     if is_png(data):
         return struct.unpack(">II", data[16:24])  # IHDR is always first
     if is_raw(data):
-        return _raw_sizes(data)
+        return _raw_probe(data)[1:]
     width, height, _subsample, _colorspace = _tj().decode_header(data)
     return width, height
 
@@ -258,32 +257,28 @@ def pick_scale(src_w: int, src_h: int, target_long_edge: int) -> tuple[int, int]
 _RAW_PREVIEW_MIN = 1024  # smaller embedded previews aren't worth showing
 
 
-class NoRawPreview(ValueError):
-    pass
-
-
-@functools.lru_cache(maxsize=2)
-def raw_preview_jpeg(data: bytes) -> bytes:
-    """The embedded camera preview as JPEG bytes. Raises NoRawPreview when
-    the file has none big enough. Cached so back-to-back decodes of the
-    same file (thumb sizes, viewer levels) extract only once (bytes
-    hashes are memoized by CPython, so repeat lookups are cheap)."""
+def _raw_probe(data: bytes) -> tuple[bytes | None, int, int]:
+    """One LibRaw open: (usable embedded JPEG preview or None, processed
+    width, height). Deliberately uncached — a cache keyed by whole-file
+    bytes retains hundreds of MB at flagship RAW sizes, and the open
+    itself costs ~10 ms on a worker thread."""
     import rawpy
-    try:
-        with rawpy.imread(io.BytesIO(data)) as raw:
+    with rawpy.imread(io.BytesIO(data)) as raw:
+        s = raw.sizes
+        try:
             thumb = raw.extract_thumb()
-    except Exception as e:
-        raise NoRawPreview(str(e)) from e
+        except Exception:
+            return None, s.width, s.height
     if thumb.format != rawpy.ThumbFormat.JPEG:
-        raise NoRawPreview("no JPEG preview embedded")
+        return None, s.width, s.height
     jpeg = bytes(thumb.data)
     try:
         w, h = _tj().decode_header(jpeg)[:2]
-    except Exception as e:
-        raise NoRawPreview(f"unreadable preview: {e}") from e
+    except Exception:
+        return None, s.width, s.height
     if max(w, h) < _RAW_PREVIEW_MIN:
-        raise NoRawPreview(f"preview only {w}x{h}")
-    return jpeg
+        return None, s.width, s.height
+    return jpeg, s.width, s.height
 
 
 def _smooth_resize(rgb: np.ndarray, target_long_edge: int) -> np.ndarray:
@@ -317,27 +312,19 @@ def _raw_postprocess(data: bytes, target_long_edge: int | None) -> np.ndarray:
     return np.ascontiguousarray(rgb)
 
 
-@functools.lru_cache(maxsize=4)
-def _raw_sizes(data: bytes) -> tuple[int, int]:
-    import rawpy
-    with rawpy.imread(io.BytesIO(data)) as raw:
-        return raw.sizes.width, raw.sizes.height
-
-
 def _decode_raw(data: bytes, target_long_edge: int | None) -> np.ndarray | bytes:
     """RAW dispatch: the embedded preview serves every request it can
     cover (that is what makes RAW browsing JPEG-fast), the demosaic
     serves the rest — full-size views and exports of files whose preview
     is smaller than the sensor, like Sony ARW. Returns preview JPEG
     bytes (ride the JPEG path) or a demosaiced array."""
-    try:
-        jpeg = raw_preview_jpeg(data)
-    except NoRawPreview:
+    jpeg, sensor_w, sensor_h = _raw_probe(data)
+    if jpeg is None:
         return _raw_postprocess(data, target_long_edge)
     plong = max(_tj().decode_header(jpeg)[:2])
     if target_long_edge is not None and plong >= target_long_edge:
         return jpeg
-    if plong >= 0.98 * max(_raw_sizes(data)):  # preview IS full resolution
+    if plong >= 0.98 * max(sensor_w, sensor_h):  # preview IS full resolution
         return jpeg
     return _raw_postprocess(data, target_long_edge)
 
