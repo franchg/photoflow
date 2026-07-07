@@ -150,11 +150,29 @@ jobs:
       - name: Tar (preserves the executable bit through artifact transfer)
         run: tar -C dist -czf photoflow-linux-x64.tar.gz photoflow
 
+      - name: Build the Debian package
+        run: |
+          uv run python scripts/make_deb.py
+          mv dist/photoflow-linux-x64.deb .
+          dpkg-deb --info photoflow-linux-x64.deb
+
+      - name: Install the .deb and launch from /usr/bin
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          sudo apt-get install -y ./photoflow-linux-x64.deb
+          test -f /usr/share/applications/photoflow.desktop
+          # exit 124 = still running when timeout hit (i.e. it started)
+          timeout 10 /usr/bin/photoflow && exit 1 || [ $? -eq 124 ]
+          sudo apt-get remove -y photoflow
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: photoflow-linux-x64
-          path: photoflow-linux-x64.tar.gz
+          path: |
+            photoflow-linux-x64.tar.gz
+            photoflow-linux-x64.deb
 
   macos:
     # Apple Silicon (arm64) — covers all Macs since 2020. Unsigned build:
@@ -241,4 +259,5 @@ jobs:
           files: |
             photoflow-windows-x64.zip
             photoflow-linux-x64.tar.gz
+            photoflow-linux-x64.deb
             photoflow-macos-arm64.zip

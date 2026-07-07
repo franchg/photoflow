@@ -14,6 +14,33 @@ import styles
 # The dev-run Exec target; the frozen binary uses sys.executable instead.
 _APP_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")
 
+# RAW mimes make "Open with" offer photoflow for camera files; the
+# *default*-viewer button stays JPEG/PNG only.
+MIME_TYPES = (
+    "image/jpeg", "image/png",
+    "image/x-adobe-dng", "image/x-canon-cr2", "image/x-canon-cr3",
+    "image/x-nikon-nef", "image/x-nikon-nrw", "image/x-sony-arw",
+    "image/x-fuji-raf", "image/x-olympus-orf", "image/x-panasonic-rw2",
+    "image/x-pentax-pef", "image/x-samsung-srw",
+)
+
+
+def desktop_entry(exec_cmd: str) -> str:
+    """The .desktop file content — shared by the self-registration below
+    and the .deb package (scripts/make_deb.py)."""
+    return "\n".join((
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=photoflow",
+        "Comment=Fast photo browser, culling and non-destructive editor",
+        f"Exec={exec_cmd} %F",
+        "Icon=photoflow",
+        "Terminal=false",
+        "Categories=Graphics;Photography;Viewer;",
+        "MimeType=" + ";".join(MIME_TYPES) + ";",
+        "StartupWMClass=photoflow",
+    )) + "\n"
+
 
 def register_linux_desktop(data_home: str | None = None, *,
                            force: bool = False) -> None:
@@ -28,6 +55,8 @@ def register_linux_desktop(data_home: str | None = None, *,
     if sys.platform != "linux":
         return
     if data_home is None:
+        if getattr(sys, "frozen", False) and sys.executable.startswith("/usr/"):
+            return  # package-managed install: the .deb ships a system entry
         if not (force or getattr(sys, "frozen", False)):
             return
         data_home = os.environ.get("XDG_DATA_HOME",
@@ -46,24 +75,7 @@ def register_linux_desktop(data_home: str | None = None, *,
         exec_cmd = f'"{os.path.realpath(sys.executable)}"'
     else:  # dev run registered via the default-viewer button
         exec_cmd = f'"{sys.executable}" "{_APP_PY}"'
-    entry = "\n".join((
-        "[Desktop Entry]",
-        "Type=Application",
-        "Name=photoflow",
-        "Comment=Fast photo browser, culling and non-destructive editor",
-        f"Exec={exec_cmd} %F",
-        "Icon=photoflow",
-        "Terminal=false",
-        "Categories=Graphics;Photography;Viewer;",
-        # RAW mimes make "Open with" offer photoflow for camera files;
-        # the *default*-viewer button stays JPEG/PNG only.
-        "MimeType=image/jpeg;image/png;image/x-adobe-dng;"
-        "image/x-canon-cr2;image/x-canon-cr3;image/x-nikon-nef;"
-        "image/x-nikon-nrw;image/x-sony-arw;image/x-fuji-raf;"
-        "image/x-olympus-orf;image/x-panasonic-rw2;image/x-pentax-pef;"
-        "image/x-samsung-srw;",
-        "StartupWMClass=photoflow",
-    )) + "\n"
+    entry = desktop_entry(exec_cmd)
     path = os.path.join(apps_dir, "photoflow.desktop")
     try:
         with open(path) as f:

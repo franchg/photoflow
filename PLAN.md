@@ -269,7 +269,14 @@ The `build` workflow (manual dispatch or `v*` tag): `windows`, `linux` and
 `macos` jobs each run the headless suite as a platform gate, build,
 sanity-check bundle contents (including the exclusion guard on Linux),
 launch-test, and upload; a single `release` job attaches all archives to
-the GitHub release. Linux builds on the oldest LTS runner for glibc
+the GitHub release. The linux job additionally wraps the one-file binary
+in a Debian package (`scripts/make_deb.py`: `/usr/bin/photoflow`, a
+system-wide desktop entry + hicolor icons, Depends on exactly the host
+graphics/session libs the bundle excludes, permissions normalized,
+`dpkg-deb --root-owner-group`), then apt-installs it on the runner and
+launch-tests `/usr/bin/photoflow` before attaching. A package-managed
+install (frozen exe under `/usr`) skips the per-user desktop
+self-registration — the system entry from the package wins. Linux builds on the oldest LTS runner for glibc
 compatibility and ships `.tar.gz` (artifacts drop the executable bit);
 macOS ships an unsigned arm64 `.app` (Gatekeeper: right-click → Open on
 first launch — notarization would need an Apple Developer ID).

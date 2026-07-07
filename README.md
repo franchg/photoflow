@@ -66,16 +66,32 @@ Everything is bundled, there is nothing else to install.
 
 #### Linux (x86-64)
 
+On Debian, Ubuntu and their derivatives the easiest path is the package:
+download
+[photoflow-linux-x64.deb](https://github.com/franchg/photoflow/releases/latest/download/photoflow-linux-x64.deb)
+and install it with
+
+```sh
+sudo apt install ./photoflow-linux-x64.deb
+```
+
+photoflow appears in your app launcher and in "Open with" for JPEG, PNG
+and RAW right away, and `sudo apt remove photoflow` uninstalls it
+cleanly.
+
+On any other distribution, download the archive instead:
+
 ```sh
 tar -xzf photoflow-linux-x64.tar.gz
 ./photoflow
 ```
 
-It is a single binary with everything inside, and it works on any
-reasonably recent distribution. On the first launch photoflow registers
-itself in your app launcher, with its icon, and if you later move the
-binary somewhere else the entry follows it. To make it the system default
-viewer for JPEG and PNG, open Settings and use File associations.
+It is the same single binary with everything inside. On the first launch
+it registers itself in your app launcher, with its icon, and if you
+later move the binary somewhere else the entry follows it.
+
+Either way, to make photoflow the system default viewer for JPEG and
+PNG, open Settings and use File associations.
 
 #### Windows (x86-64)
 
